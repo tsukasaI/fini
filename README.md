@@ -1,6 +1,6 @@
 # fini
 
-[![CI](https://github.com/tsukasaI/fini/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukasaI/fini/actions/workflows/ci.yml)
+[![CI](https://github.com/tsukasaI/fini/actions/workflows/ci.yaml/badge.svg)](https://github.com/tsukasaI/fini/actions/workflows/ci.yaml)
 [![Crates.io](https://img.shields.io/crates/v/fini.svg)](https://crates.io/crates/fini)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
