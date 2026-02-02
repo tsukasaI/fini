@@ -1,92 +1,67 @@
 # fini
 
+[![CI](https://github.com/tsukasaI/fini/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukasaI/fini/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/fini.svg)](https://crates.io/crates/fini)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A lightweight file normalization CLI tool for AI coding agents.
 
 Standardizes file formatting as a finishing step after code editing.
 
 ## Installation
 
+### Cargo
 ```bash
-cargo install --path .
+cargo install fini
 ```
 
-Or build from source:
-
+### Nix
 ```bash
-cargo build --release
-# Binary at ./target/release/fini
+nix run github:tsukasaI/fini -- .
+nix profile install github:tsukasaI/fini
 ```
+
+### Homebrew
+```bash
+brew install tsukasaI/tap/fini
+```
+
+### Pre-built binaries
+Download from [GitHub Releases](https://github.com/tsukasaI/fini/releases).
 
 ## Usage
 
 ```bash
-# Fix files in current directory
-fini .
-
-# Fix specific files
-fini src/main.rs src/lib.rs
-
-# Check only (no modifications), exit 1 if problems found
-fini --check .
-
-# Preview changes in diff format
-fini --diff .
-
-# Output only modified file names
-fini --quiet .
+fini .                    # Fix current directory
+fini src/main.rs          # Fix specific file
+fini --check .            # Check only, exit 1 if problems
+fini --diff .             # Preview changes
+fini --quiet .            # Output only filenames
 ```
 
-## What it does
+## Features
 
 | Rule | Description |
 |------|-------------|
-| EOF newline | Add `\n` at end if missing, normalize multiple trailing newlines to one |
-| Line endings | Convert CRLF (`\r\n`) and CR (`\r`) to LF (`\n`) |
-| Trailing whitespace | Remove trailing spaces and tabs from each line |
-| Full-width spaces | Detect and fix full-width space (U+3000) to regular space |
+| EOF newline | Add `\n` if missing, normalize multiple trailing newlines |
+| Line endings | CRLF/CR to LF |
+| Trailing whitespace | Remove trailing spaces and tabs |
+| Full-width spaces | Fix U+3000 to regular space (with warning) |
 
-## Skipped files
+## Skipped
 
-- Binary files (detected by null bytes in first 8KB)
+- Binary files (null bytes in first 8KB)
 - Empty files
-- Hidden files/directories (starting with `.`)
+- Hidden files (`.foo`)
 - `.git/` directory
-- Files matching `.gitignore` patterns
+- `.gitignore` patterns
 
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success / No problems found |
-| 1 | Problems detected (`--check` mode) or error occurred |
-
-## Output examples
-
-Normal mode:
-```
-Warning: src/utils.rs:42 full-width space
-Fixed: src/main.rs
-Fixed: src/utils.rs
-
-2 files fixed, 1 warnings
-```
-
-Check mode (`--check`):
-```
-Error: src/main.rs
-  - missing EOF newline
-  - trailing whitespace at line 15
-
-1 files with problems
-```
-
-Diff mode (`--diff`):
-```
---- src/main.rs
-+++ src/main.rs
--    let x = 1;
-+    let x = 1;
-```
+| 0 | Success |
+| 1 | Problems found (`--check`) or error |
 
 ## License
 
