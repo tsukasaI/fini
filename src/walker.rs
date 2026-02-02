@@ -22,7 +22,7 @@ pub fn walk_paths(paths: &[String]) -> impl Iterator<Item = io::Result<PathBuf>>
                     }
                 }
                 Err(e) => {
-                    all_files.push(Err(io::Error::new(io::ErrorKind::Other, e.to_string())));
+                    all_files.push(Err(io::Error::other(e.to_string())));
                 }
             }
         }

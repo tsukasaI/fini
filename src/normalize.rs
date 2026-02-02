@@ -34,46 +34,34 @@ fn normalize_line_endings(content: &str) -> String {
 
 fn fix_fullwidth_spaces(content: &str) -> (String, Vec<Problem>) {
     let mut problems = vec![];
-    let mut result = String::with_capacity(content.len());
 
     for (line_idx, line) in content.lines().enumerate() {
-        for ch in line.chars() {
-            if ch == FULLWIDTH_SPACE {
-                problems.push(Problem {
-                    line: line_idx + 1, // 1-indexed
-                    kind: ProblemKind::FullWidthSpace,
-                });
-                result.push(' ');
-            } else {
-                result.push(ch);
-            }
+        let count = line.chars().filter(|&c| c == FULLWIDTH_SPACE).count();
+        for _ in 0..count {
+            problems.push(Problem {
+                line: line_idx + 1,
+                kind: ProblemKind::FullWidthSpace,
+            });
         }
-        result.push('\n');
     }
 
-    // Remove the trailing newline we added (normalize_eof_newline will handle it)
-    if result.ends_with('\n') && !content.ends_with('\n') {
-        result.pop();
-    } else if content.ends_with('\n') && !result.ends_with('\n') {
-        result.push('\n');
-    }
-
+    let result = content.replace(FULLWIDTH_SPACE, " ");
     (result, problems)
 }
 
 fn remove_trailing_whitespace(content: &str) -> String {
     content
         .lines()
-        .map(|line| line.trim_end_matches(|c| c == ' ' || c == '\t'))
+        .map(|line| line.trim_end_matches([' ', '\t']))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 fn normalize_eof_newline(content: &str) -> String {
-    let trimmed = content.trim_end_matches('\n');
-    if trimmed.is_empty() && content.is_empty() {
+    if content.is_empty() {
         return String::new();
     }
+    let trimmed = content.trim_end_matches('\n');
     format!("{trimmed}\n")
 }
 

@@ -66,18 +66,12 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
         return Ok(());
     }
 
-    let has_fullwidth = normalize_result
+    let fullwidth_count = normalize_result
         .problems
         .iter()
-        .any(|p| matches!(p.kind, ProblemKind::FullWidthSpace));
-
-    if has_fullwidth {
-        result.warnings += normalize_result
-            .problems
-            .iter()
-            .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
-            .count();
-    }
+        .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
+        .count();
+    result.warnings += fullwidth_count;
 
     if config.check_only {
         result.files_with_problems += 1;

@@ -104,12 +104,11 @@ fn print_diff(path: &Path, original: &str, content: &str) {
         for op in group {
             for change in diff.iter_changes(op) {
                 let sign = match change.tag() {
-                    ChangeTag::Delete => "-",
-                    ChangeTag::Insert => "+",
-                    ChangeTag::Equal => " ",
+                    ChangeTag::Delete => '-',
+                    ChangeTag::Insert => '+',
+                    ChangeTag::Equal => ' ',
                 };
-
-                print!("{}{}", sign, change);
+                print!("{sign}{change}");
             }
         }
     }
