@@ -108,8 +108,12 @@ mod tests {
         let files: Vec<_> = walk_paths(&paths).filter_map(|r| r.ok()).collect();
 
         // ignored.txt should be excluded by .gitignore rules
-        assert!(files.iter().all(|f| !f.to_string_lossy().contains("ignored.txt")));
+        assert!(files
+            .iter()
+            .all(|f| !f.to_string_lossy().contains("ignored.txt")));
         // kept.txt should be present
-        assert!(files.iter().any(|f| f.to_string_lossy().contains("kept.txt")));
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains("kept.txt")));
     }
 }

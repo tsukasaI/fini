@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use fini::{run, Config, OutputMode};
+use fini::{run, Config, NormalizeConfig, OutputMode};
 
 #[derive(Parser)]
 #[command(name = "fini")]
@@ -22,6 +22,22 @@ struct Cli {
     /// Output only modified file names
     #[arg(short, long)]
     quiet: bool,
+
+    /// Limit consecutive blank lines to N (0 = remove all blank lines)
+    #[arg(long, value_name = "N")]
+    max_blank_lines: Option<usize>,
+
+    /// Keep zero-width characters (default: remove)
+    #[arg(long)]
+    keep_zero_width: bool,
+
+    /// Keep leading blank lines (default: remove)
+    #[arg(long)]
+    keep_leading_blanks: bool,
+
+    /// Remove code block remnants (```lang markers)
+    #[arg(long)]
+    fix_code_blocks: bool,
 }
 
 fn main() -> ExitCode {
@@ -35,9 +51,17 @@ fn main() -> ExitCode {
         OutputMode::Normal
     };
 
+    let normalize = NormalizeConfig {
+        max_blank_lines: cli.max_blank_lines,
+        remove_zero_width: !cli.keep_zero_width,
+        remove_leading_blanks: !cli.keep_leading_blanks,
+        fix_code_blocks: cli.fix_code_blocks,
+    };
+
     let config = Config {
         check_only: cli.check,
         output_mode,
+        normalize,
     };
 
     match run(&cli.paths, &config) {

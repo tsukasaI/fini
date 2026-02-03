@@ -1,4 +1,4 @@
-use crate::normalize::{NormalizeResult, ProblemKind};
+use crate::normalize::{NormalizeConfig, NormalizeResult, ProblemKind};
 use similar::{ChangeTag, TextDiff};
 use std::path::Path;
 
@@ -12,6 +12,7 @@ pub enum OutputMode {
 pub struct Config {
     pub check_only: bool,
     pub output_mode: OutputMode,
+    pub normalize: NormalizeConfig,
 }
 
 pub struct RunResult {
@@ -53,37 +54,47 @@ pub fn print_check_result(path: &Path, result: &NormalizeResult, config: &Config
         }
     }
 
-    // Full-width spaces
+    // Problems from normalization
     for problem in &result.problems {
-        if matches!(problem.kind, ProblemKind::FullWidthSpace) {
-            println!("  - full-width space at line {}", problem.line);
+        match &problem.kind {
+            ProblemKind::FullWidthSpace => {
+                println!("  - full-width space at line {}", problem.line);
+            }
+            ProblemKind::LeadingBlankLines { count } => {
+                println!("  - {} leading blank line(s)", count);
+            }
+            ProblemKind::ZeroWidthCharacter => {
+                println!("  - zero-width character at line {}", problem.line);
+            }
+            ProblemKind::ExcessiveBlankLines { found, limit } => {
+                println!(
+                    "  - {} consecutive blank lines at line {} (limit: {})",
+                    found, problem.line, limit
+                );
+            }
+            ProblemKind::CodeBlockRemnant => {
+                println!("  - code block remnant at line {}", problem.line);
+            }
         }
     }
 }
 
-pub fn print_fix_result(
-    path: &Path,
-    original: &str,
-    result: &NormalizeResult,
-    config: &Config,
-) {
+pub fn print_fix_result(path: &Path, original: &str, result: &NormalizeResult, config: &Config) {
     match config.output_mode {
-        OutputMode::Quiet => {
-            println!("{}", path.display());
-        }
-        OutputMode::Diff => {
-            print_diff(path, original, &result.content);
-        }
+        OutputMode::Quiet => println!("{}", path.display()),
+        OutputMode::Diff => print_diff(path, original, &result.content),
         OutputMode::Normal => {
             // Print warnings for full-width spaces
-            for problem in &result.problems {
-                if matches!(problem.kind, ProblemKind::FullWidthSpace) {
-                    println!(
-                        "Warning: {}:{} full-width space",
-                        path.display(),
-                        problem.line
-                    );
-                }
+            for problem in result
+                .problems
+                .iter()
+                .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
+            {
+                println!(
+                    "Warning: {}:{} full-width space",
+                    path.display(),
+                    problem.line
+                );
             }
             println!("Fixed: {}", path.display());
         }

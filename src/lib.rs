@@ -2,7 +2,7 @@ pub mod normalize;
 mod output;
 pub mod walker;
 
-pub use normalize::{normalize_content, NormalizeResult, Problem, ProblemKind};
+pub use normalize::{normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind};
 pub use output::{Config, OutputMode, RunResult};
 pub use walker::walk_paths;
 
@@ -60,7 +60,7 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
         Err(_) => return Ok(()), // Skip non-UTF-8 files
     };
 
-    let normalize_result = normalize_content(&content);
+    let normalize_result = normalize_content(&content, &config.normalize);
 
     if !normalize_result.has_changes() {
         return Ok(());
