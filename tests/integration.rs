@@ -207,3 +207,162 @@ fn test_directory_recursive() {
         "world\n"
     );
 }
+
+// ===========================================
+// Phase 2: Configuration File Tests
+// ===========================================
+
+#[test]
+fn test_init_creates_config_file() {
+    let dir = TempDir::new().unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--init")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let config_path = dir.path().join("fini.toml");
+    assert!(config_path.exists());
+
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(content.contains("[normalize]"));
+    assert!(content.contains("max_blank_lines"));
+}
+
+#[test]
+fn test_init_fails_if_config_exists() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("fini.toml");
+    fs::write(&config_path, "existing").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--init")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_config_file_enables_fix_code_blocks() {
+    let dir = TempDir::new().unwrap();
+
+    // Create config file with fix_code_blocks enabled
+    let config_path = dir.path().join("fini.toml");
+    fs::write(
+        &config_path,
+        r#"
+[normalize]
+fix_code_blocks = true
+"#,
+    )
+    .unwrap();
+
+    // Create file with code blocks
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "```rust\nfn main() {}\n```\n").unwrap();
+
+    fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Code blocks should be removed
+    assert_eq!(fs::read_to_string(&file).unwrap(), "fn main() {}\n");
+}
+
+#[test]
+fn test_cli_overrides_config_file() {
+    let dir = TempDir::new().unwrap();
+
+    // Create config file with remove_zero_width = false
+    let config_path = dir.path().join("fini.toml");
+    fs::write(
+        &config_path,
+        r#"
+[normalize]
+remove_zero_width = false
+"#,
+    )
+    .unwrap();
+
+    // Create file with zero-width character
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\u{200B}world\n").unwrap();
+
+    // Run without CLI override - config should keep zero-width
+    fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Zero-width should NOT be removed (config says false)
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\u{200B}world\n");
+}
+
+#[test]
+fn test_explicit_config_path() {
+    let dir = TempDir::new().unwrap();
+
+    // Create custom config file in subdirectory
+    let config_dir = dir.path().join("config");
+    fs::create_dir(&config_dir).unwrap();
+    let config_path = config_dir.join("custom.toml");
+    fs::write(
+        &config_path,
+        r#"
+[normalize]
+fix_code_blocks = true
+"#,
+    )
+    .unwrap();
+
+    // Create file with code blocks
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "```rust\ncode\n```\n").unwrap();
+
+    fini_cmd()
+        .arg("--config")
+        .arg(config_path.to_str().unwrap())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Code blocks should be removed
+    assert_eq!(fs::read_to_string(&file).unwrap(), "code\n");
+}
+
+#[test]
+fn test_config_max_blank_lines() {
+    let dir = TempDir::new().unwrap();
+
+    // Create config file with max_blank_lines = 1
+    let config_path = dir.path().join("fini.toml");
+    fs::write(
+        &config_path,
+        r#"
+[normalize]
+max_blank_lines = 1
+"#,
+    )
+    .unwrap();
+
+    // Create file with multiple blank lines
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "line1\n\n\n\nline2\n").unwrap();
+
+    fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should limit to 1 blank line
+    assert_eq!(fs::read_to_string(&file).unwrap(), "line1\n\nline2\n");
+}

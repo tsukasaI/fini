@@ -37,6 +37,7 @@ fini src/main.rs          # Fix specific file
 fini --check .            # Check only, exit 1 if problems
 fini --diff .             # Preview changes
 fini --quiet .            # Output only filenames
+fini --init               # Generate fini.toml template
 ```
 
 ### Options
@@ -46,7 +47,33 @@ fini --quiet .            # Output only filenames
 --keep-zero-width       Keep zero-width characters (default: remove)
 --keep-leading-blanks   Keep leading blank lines (default: remove)
 --fix-code-blocks       Remove code block remnants (```lang markers)
+--init                  Generate fini.toml configuration template
+--config <PATH>         Use specific config file
 ```
+
+## Configuration
+
+Create `fini.toml` in your project root (or run `fini --init`):
+
+```toml
+[normalize]
+max_blank_lines = 2        # Limit consecutive blank lines
+remove_zero_width = true   # Remove zero-width characters
+remove_leading_blanks = true
+fix_code_blocks = false    # Remove ``` markers
+```
+
+### Priority
+
+CLI arguments > `fini.toml` > defaults
+
+### Config Discovery
+
+Searches upward from current directory, stops at git root.
+
+### .editorconfig
+
+fini reads `.editorconfig` and warns if settings conflict with its fixed behaviors (always trims whitespace, always LF, always adds final newline).
 
 ## Features
 

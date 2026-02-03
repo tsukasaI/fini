@@ -1,8 +1,10 @@
 /// Full-width space character (U+3000)
 const FULLWIDTH_SPACE: char = '\u{3000}';
 
+use serde::{Deserialize, Serialize};
+
 /// Configuration for normalization rules
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizeConfig {
     /// Maximum consecutive blank lines (None = no limit)
     pub max_blank_lines: Option<usize>,
