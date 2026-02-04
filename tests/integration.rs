@@ -366,3 +366,173 @@ max_blank_lines = 1
     // Should limit to 1 blank line
     assert_eq!(fs::read_to_string(&file).unwrap(), "line1\n\nline2\n");
 }
+
+// ===========================================
+// Phase 3: Human Error Prevention Tests
+// ===========================================
+
+#[test]
+fn test_cli_detects_todo_in_check_mode() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.rs");
+    fs::write(&file, "// TODO: fix this later\nfn main() {}\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 1 (problems found)
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("TODO"));
+}
+
+#[test]
+fn test_cli_detects_debug_code_in_check_mode() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.js");
+    fs::write(&file, "console.log('debug');\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 1 (problems found)
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("console.log"));
+}
+
+#[test]
+fn test_cli_detects_secret_pattern() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.py");
+    fs::write(&file, "API_KEY = \"sk_live_abcd12345678\"\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 1 (problems found)
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("secret"));
+}
+
+#[test]
+fn test_cli_detects_long_lines() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, format!("{}\n", "a".repeat(150))).unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--max-line-length")
+        .arg("120")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 1 (problems found)
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("too long"));
+}
+
+#[test]
+fn test_cli_disable_todo_detection() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.rs");
+    fs::write(&file, "// TODO: fix this later\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--no-detect-todos")
+        .arg("--no-detect-debug")
+        .arg("--no-detect-secrets")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 0 (TODO not flagged)
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_cli_strict_debug_includes_console_error() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.js");
+    fs::write(&file, "console.error('error');\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--strict-debug")
+        .arg("--no-detect-todos")
+        .arg("--no-detect-secrets")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 1 (console.error flagged in strict mode)
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_cli_default_excludes_console_error() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.js");
+    fs::write(&file, "console.error('error');\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--no-detect-todos")
+        .arg("--no-detect-secrets")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 0 (console.error not flagged by default)
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_config_file_controls_detections() {
+    let dir = TempDir::new().unwrap();
+
+    // Create config file with detect_todos = false
+    let config_path = dir.path().join("fini.toml");
+    fs::write(
+        &config_path,
+        r#"
+[normalize]
+detect_todos = false
+detect_debug = false
+detect_secrets = false
+"#,
+    )
+    .unwrap();
+
+    // Create file with TODO
+    let file = dir.path().join("test.rs");
+    fs::write(&file, "// TODO: fix this\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should exit with 0 (TODO not flagged per config)
+    assert!(output.status.success());
+}

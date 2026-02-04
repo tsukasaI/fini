@@ -68,7 +68,13 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
 
     let normalize_result = normalize_content(&content, &config.normalize);
 
-    if !normalize_result.has_changes() {
+    // Check for detection-only problems (these don't change content)
+    let has_detection_problems = normalize_result
+        .problems
+        .iter()
+        .any(|p| p.kind.is_detection_only());
+
+    if !normalize_result.has_changes() && !has_detection_problems {
         return Ok(());
     }
 
@@ -83,9 +89,15 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
         result.files_with_problems += 1;
         output::print_check_result(path, &normalize_result, config);
     } else {
-        fs::write(path, &normalize_result.content)?;
-        result.files_fixed += 1;
-        output::print_fix_result(path, &content, &normalize_result, config);
+        // Only write if content changed (detection problems don't modify content)
+        if normalize_result.has_changes() {
+            fs::write(path, &normalize_result.content)?;
+            result.files_fixed += 1;
+        }
+        // Print fix result if there were changes or detection problems
+        if normalize_result.has_changes() || has_detection_problems {
+            output::print_fix_result(path, &content, &normalize_result, config);
+        }
     }
 
     Ok(())

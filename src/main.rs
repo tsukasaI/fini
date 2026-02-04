@@ -44,6 +44,31 @@ struct Cli {
     #[arg(long)]
     fix_code_blocks: bool,
 
+    // Phase 3: Human Error Prevention
+    /// Skip TODO comment detection
+    #[arg(long)]
+    no_detect_todos: bool,
+
+    /// Skip FIXME comment detection
+    #[arg(long)]
+    no_detect_fixmes: bool,
+
+    /// Skip debug code detection
+    #[arg(long)]
+    no_detect_debug: bool,
+
+    /// Include console.error/eprintln in debug code detection
+    #[arg(long)]
+    strict_debug: bool,
+
+    /// Skip secret pattern detection
+    #[arg(long)]
+    no_detect_secrets: bool,
+
+    /// Maximum line length (warn if exceeded)
+    #[arg(long, value_name = "N")]
+    max_line_length: Option<usize>,
+
     /// Generate a template fini.toml configuration file
     #[arg(long)]
     init: bool,
@@ -161,5 +186,12 @@ fn build_cli_options(cli: &Cli) -> CliNormalizeOptions {
         keep_zero_width: cli.keep_zero_width.then_some(true),
         keep_leading_blanks: cli.keep_leading_blanks.then_some(true),
         fix_code_blocks: cli.fix_code_blocks.then_some(true),
+        // Phase 3: Human Error Prevention
+        no_detect_todos: cli.no_detect_todos.then_some(true),
+        no_detect_fixmes: cli.no_detect_fixmes.then_some(true),
+        no_detect_debug: cli.no_detect_debug.then_some(true),
+        strict_debug: cli.strict_debug.then_some(true),
+        no_detect_secrets: cli.no_detect_secrets.then_some(true),
+        max_line_length: cli.max_line_length,
     }
 }

@@ -75,6 +75,25 @@ pub fn print_check_result(path: &Path, result: &NormalizeResult, config: &Config
             ProblemKind::CodeBlockRemnant => {
                 println!("  - code block remnant at line {}", problem.line);
             }
+            // Phase 3: Human Error Prevention
+            ProblemKind::TodoComment => {
+                println!("  - TODO comment at line {}", problem.line);
+            }
+            ProblemKind::FixmeComment => {
+                println!("  - FIXME comment at line {}", problem.line);
+            }
+            ProblemKind::DebugCode { pattern } => {
+                println!("  - debug code '{}' at line {}", pattern, problem.line);
+            }
+            ProblemKind::SecretPattern { hint } => {
+                println!("  - potential secret ({}) at line {}", hint, problem.line);
+            }
+            ProblemKind::LongLine { length, limit } => {
+                println!(
+                    "  - line {} is too long ({} > {} chars)",
+                    problem.line, length, limit
+                );
+            }
         }
     }
 }

@@ -17,6 +17,19 @@ pub struct CliNormalizeOptions {
     /// If Some(true), keep leading blanks (inverted in config)
     pub keep_leading_blanks: Option<bool>,
     pub fix_code_blocks: Option<bool>,
+    // Phase 3: Human Error Prevention
+    /// If Some(true), skip TODO detection
+    pub no_detect_todos: Option<bool>,
+    /// If Some(true), skip FIXME detection
+    pub no_detect_fixmes: Option<bool>,
+    /// If Some(true), skip debug code detection
+    pub no_detect_debug: Option<bool>,
+    /// If Some(true), include console.error/eprintln in debug detection
+    pub strict_debug: Option<bool>,
+    /// If Some(true), skip secret pattern detection
+    pub no_detect_secrets: Option<bool>,
+    /// Maximum line length
+    pub max_line_length: Option<usize>,
 }
 
 /// Merge configurations from CLI, TOML, and defaults.
@@ -47,6 +60,35 @@ pub fn merge_normalize_config(
             .fix_code_blocks
             .or_else(|| toml.and_then(|t| t.fix_code_blocks))
             .unwrap_or(defaults.fix_code_blocks),
+        // Phase 3: Human Error Prevention
+        detect_todos: cli
+            .no_detect_todos
+            .map(|no| !no)
+            .or_else(|| toml.and_then(|t| t.detect_todos))
+            .unwrap_or(defaults.detect_todos),
+        detect_fixmes: cli
+            .no_detect_fixmes
+            .map(|no| !no)
+            .or_else(|| toml.and_then(|t| t.detect_fixmes))
+            .unwrap_or(defaults.detect_fixmes),
+        detect_debug: cli
+            .no_detect_debug
+            .map(|no| !no)
+            .or_else(|| toml.and_then(|t| t.detect_debug))
+            .unwrap_or(defaults.detect_debug),
+        strict_debug: cli
+            .strict_debug
+            .or_else(|| toml.and_then(|t| t.strict_debug))
+            .unwrap_or(defaults.strict_debug),
+        detect_secrets: cli
+            .no_detect_secrets
+            .map(|no| !no)
+            .or_else(|| toml.and_then(|t| t.detect_secrets))
+            .unwrap_or(defaults.detect_secrets),
+        max_line_length: cli
+            .max_line_length
+            .or_else(|| toml.and_then(|t| t.max_line_length))
+            .or(defaults.max_line_length),
     }
 }
 
@@ -73,6 +115,7 @@ mod tests {
             remove_zero_width: Some(false),
             remove_leading_blanks: None,
             fix_code_blocks: Some(true),
+            ..Default::default()
         };
 
         let config = merge_normalize_config(&cli, Some(&toml));
@@ -90,12 +133,14 @@ mod tests {
             keep_zero_width: Some(true), // keep = true -> remove = false
             keep_leading_blanks: None,
             fix_code_blocks: Some(false),
+            ..Default::default()
         };
         let toml = NormalizeSection {
             max_blank_lines: Some(2),
             remove_zero_width: Some(true),
             remove_leading_blanks: Some(false),
             fix_code_blocks: Some(true),
+            ..Default::default()
         };
 
         let config = merge_normalize_config(&cli, Some(&toml));
@@ -113,6 +158,7 @@ mod tests {
             keep_zero_width: Some(false),
             keep_leading_blanks: Some(false),
             fix_code_blocks: Some(true),
+            ..Default::default()
         };
 
         let config = merge_normalize_config(&cli, None);

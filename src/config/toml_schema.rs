@@ -24,4 +24,23 @@ pub struct NormalizeSection {
 
     /// Remove code block remnants (default: false)
     pub fix_code_blocks: Option<bool>,
+
+    // Phase 3: Human Error Prevention
+    /// Detect TODO comments (default: true)
+    pub detect_todos: Option<bool>,
+
+    /// Detect FIXME comments (default: true)
+    pub detect_fixmes: Option<bool>,
+
+    /// Detect debug code (default: true)
+    pub detect_debug: Option<bool>,
+
+    /// Include console.error/eprintln in debug detection (default: false)
+    pub strict_debug: Option<bool>,
+
+    /// Detect secret patterns (default: true)
+    pub detect_secrets: Option<bool>,
+
+    /// Maximum line length (None = disabled)
+    pub max_line_length: Option<usize>,
 }
