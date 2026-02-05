@@ -324,7 +324,6 @@ const DEBUG_PATTERNS: &[&str] = &[
     "debugger",
 ];
 
-
 fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem> {
     let patterns: &[&str] = if strict_mode {
         &[
@@ -350,14 +349,15 @@ fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem> {
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
-            patterns.iter().find(|p| line.contains(*p)).map(|pattern| {
-                Problem {
+            patterns
+                .iter()
+                .find(|p| line.contains(*p))
+                .map(|pattern| Problem {
                     line: line_idx + 1,
                     kind: ProblemKind::DebugCode {
                         pattern: pattern.trim_end_matches('(').to_string(),
                     },
-                }
-            })
+                })
         })
         .collect()
 }
