@@ -121,6 +121,23 @@ Add to `.claude/settings.json`:
 | 0 | Success |
 | 1 | Problems found (`--check`) or error |
 
+## Development
+
+### Pre-commit Hooks
+
+This project uses [prek](https://github.com/j178/prek) for pre-commit hooks.
+
+```bash
+# Install prek
+cargo install prek
+
+# Install git hooks
+prek install
+
+# Run hooks manually
+prek run --all-files
+```
+
 ## License
 
 MIT
