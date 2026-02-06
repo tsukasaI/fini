@@ -37,12 +37,19 @@ fini src/main.rs          # Fix specific file
 fini --check .            # Check only, exit 1 if problems
 fini --diff .             # Preview changes
 fini --quiet .            # Output only filenames
+fini -v .                 # Verbose: show all processed files
 fini --init               # Generate fini.toml template
+cat file.txt | fini --stdin  # Read from stdin, output to stdout
 ```
 
 ### Options
 
 ```
+-v, --verbose           Show all processed files (including clean ones)
+--stdin                 Read from stdin, output to stdout
+--color                 Force colored output
+--no-color              Disable colored output
+--no-progress           Hide progress bar
 --max-blank-lines <N>   Limit consecutive blank lines to N
 --keep-zero-width       Keep zero-width characters (default: remove)
 --keep-leading-blanks   Keep leading blank lines (default: remove)
