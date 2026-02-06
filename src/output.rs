@@ -1,3 +1,4 @@
+use crate::colors::Colors;
 use crate::normalize::{NormalizeConfig, NormalizeResult, ProblemKind};
 use similar::{ChangeTag, TextDiff};
 use std::path::Path;
@@ -15,6 +16,24 @@ pub struct Config {
     pub normalize: NormalizeConfig,
 }
 
+pub struct OutputContext {
+    pub mode: OutputMode,
+    pub colors: Colors,
+    pub verbose: bool,
+    pub show_progress: bool,
+}
+
+impl OutputContext {
+    pub fn new(mode: OutputMode, use_colors: bool, verbose: bool, show_progress: bool) -> Self {
+        Self {
+            mode,
+            colors: Colors::new(use_colors),
+            verbose,
+            show_progress,
+        }
+    }
+}
+
 pub struct RunResult {
     pub files_fixed: usize,
     pub files_with_problems: usize,
@@ -27,13 +46,23 @@ impl RunResult {
     }
 }
 
-pub fn print_check_result(path: &Path, result: &NormalizeResult, config: &Config) {
-    if config.output_mode == OutputMode::Quiet {
+pub fn print_check_result(
+    path: &Path,
+    result: &NormalizeResult,
+    _config: &Config,
+    ctx: &OutputContext,
+) {
+    if ctx.mode == OutputMode::Quiet {
         println!("{}", path.display());
         return;
     }
 
-    println!("Error: {}", path.display());
+    println!(
+        "{}Error:{} {}",
+        ctx.colors.error,
+        ctx.colors.reset(),
+        path.display()
+    );
 
     if result.original != result.content {
         // Check what kind of changes were made
@@ -98,10 +127,16 @@ pub fn print_check_result(path: &Path, result: &NormalizeResult, config: &Config
     }
 }
 
-pub fn print_fix_result(path: &Path, original: &str, result: &NormalizeResult, config: &Config) {
-    match config.output_mode {
+pub fn print_fix_result(
+    path: &Path,
+    original: &str,
+    result: &NormalizeResult,
+    _config: &Config,
+    ctx: &OutputContext,
+) {
+    match ctx.mode {
         OutputMode::Quiet => println!("{}", path.display()),
-        OutputMode::Diff => print_diff(path, original, &result.content),
+        OutputMode::Diff => print_diff(&path.display().to_string(), original, &result.content),
         OutputMode::Normal => {
             // Print warnings for full-width spaces
             for problem in result
@@ -110,21 +145,53 @@ pub fn print_fix_result(path: &Path, original: &str, result: &NormalizeResult, c
                 .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
             {
                 println!(
-                    "Warning: {}:{} full-width space",
+                    "{}Warning:{} {}:{} full-width space",
+                    ctx.colors.warning,
+                    ctx.colors.reset(),
                     path.display(),
                     problem.line
                 );
             }
-            println!("Fixed: {}", path.display());
+            println!(
+                "{}Fixed:{} {}",
+                ctx.colors.success,
+                ctx.colors.reset(),
+                path.display()
+            );
         }
     }
 }
 
-fn print_diff(path: &Path, original: &str, content: &str) {
+pub fn print_checked(path: &Path, ctx: &OutputContext) {
+    if ctx.mode == OutputMode::Quiet {
+        return;
+    }
+    println!(
+        "{}Checked:{} {}",
+        ctx.colors.info,
+        ctx.colors.reset(),
+        path.display()
+    );
+}
+
+pub fn print_skipped(path: &Path, reason: &str, ctx: &OutputContext) {
+    if ctx.mode == OutputMode::Quiet {
+        return;
+    }
+    println!(
+        "{}Skipping {}: {}{}",
+        ctx.colors.info,
+        reason,
+        ctx.colors.reset(),
+        path.display()
+    );
+}
+
+pub fn print_diff(label: &str, original: &str, content: &str) {
     let diff = TextDiff::from_lines(original, content);
 
-    println!("--- {}", path.display());
-    println!("+++ {}", path.display());
+    println!("--- {label}");
+    println!("+++ {label}");
 
     for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
         if idx > 0 {
@@ -144,24 +211,39 @@ fn print_diff(path: &Path, original: &str, content: &str) {
     }
 }
 
-pub fn print_summary(result: &RunResult, config: &Config) {
-    if config.output_mode == OutputMode::Quiet {
+pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
+    if ctx.mode == OutputMode::Quiet {
         return;
     }
 
     if config.check_only {
         if result.files_with_problems > 0 {
             println!();
-            println!("{} files with problems", result.files_with_problems);
+            println!(
+                "{}{} files with problems{}",
+                ctx.colors.error,
+                result.files_with_problems,
+                ctx.colors.reset()
+            );
         }
     } else if result.files_fixed > 0 || result.warnings > 0 {
         println!();
         let mut parts = vec![];
         if result.files_fixed > 0 {
-            parts.push(format!("{} files fixed", result.files_fixed));
+            parts.push(format!(
+                "{}{} files fixed{}",
+                ctx.colors.success,
+                result.files_fixed,
+                ctx.colors.reset()
+            ));
         }
         if result.warnings > 0 {
-            parts.push(format!("{} warnings", result.warnings));
+            parts.push(format!(
+                "{}{} warnings{}",
+                ctx.colors.warning,
+                result.warnings,
+                ctx.colors.reset()
+            ));
         }
         println!("{}", parts.join(", "));
     }

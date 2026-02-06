@@ -1,15 +1,19 @@
+pub mod colors;
 pub mod config;
 pub mod normalize;
 mod output;
+pub mod progress;
 pub mod walker;
 
+pub use colors::{should_use_colors, Colors};
 pub use config::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
     load_config, merge_normalize_config, parse_editorconfig, CliNormalizeOptions, ConfigError,
     FiniToml, NormalizeSection, FINI_TOML_TEMPLATE,
 };
 pub use normalize::{normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind};
-pub use output::{Config, OutputMode, RunResult};
+pub use output::{print_diff, Config, OutputContext, OutputMode, RunResult};
+pub use progress::ProgressReporter;
 pub use walker::walk_paths;
 
 use std::fs;
@@ -25,45 +29,75 @@ pub fn is_binary(content: &[u8]) -> bool {
 }
 
 /// Main entry point: process all files in given paths
-pub fn run(paths: &[String], config: &Config) -> io::Result<RunResult> {
+pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result<RunResult> {
     let mut result = RunResult {
         files_fixed: 0,
         files_with_problems: 0,
         warnings: 0,
     };
 
+    // Count files for progress bar (2-pass approach)
+    let file_count: u64 = walk_paths(paths).filter_map(|r| r.ok()).count() as u64;
+
+    let progress = ProgressReporter::new(file_count, ctx.show_progress);
+
     for path in walk_paths(paths) {
         let path = path?;
 
-        if let Err(e) = process_file(&path, config, &mut result) {
-            if config.output_mode != OutputMode::Quiet {
+        // Update progress bar message with current file name
+        if let Some(name) = path.file_name() {
+            progress.set_message(&name.to_string_lossy());
+        }
+
+        if let Err(e) = process_file(&path, config, &mut result, ctx) {
+            if ctx.mode != OutputMode::Quiet {
                 eprintln!("Error processing {}: {e}", path.display());
             }
         }
+
+        progress.inc();
     }
 
-    output::print_summary(&result, config);
+    progress.finish();
+
+    output::print_summary(&result, config, ctx);
 
     Ok(result)
 }
 
-fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Result<()> {
+fn process_file(
+    path: &Path,
+    config: &Config,
+    result: &mut RunResult,
+    ctx: &OutputContext,
+) -> io::Result<()> {
     let bytes = fs::read(path)?;
 
     // Skip empty files
     if bytes.is_empty() {
+        if ctx.verbose {
+            output::print_skipped(path, "empty", ctx);
+        }
         return Ok(());
     }
 
     // Skip binary files
     if is_binary(&bytes) {
+        if ctx.verbose {
+            output::print_skipped(path, "binary", ctx);
+        }
         return Ok(());
     }
 
     // Try to read as UTF-8
     let content = match String::from_utf8(bytes) {
         Ok(s) => s,
-        Err(_) => return Ok(()), // Skip non-UTF-8 files
+        Err(_) => {
+            if ctx.verbose {
+                output::print_skipped(path, "non-UTF-8", ctx);
+            }
+            return Ok(());
+        }
     };
 
     let normalize_result = normalize_content(&content, &config.normalize);
@@ -75,6 +109,10 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
         .any(|p| p.kind.is_detection_only());
 
     if !normalize_result.has_changes() && !has_detection_problems {
+        // No changes and no detection problems
+        if ctx.verbose {
+            output::print_checked(path, ctx);
+        }
         return Ok(());
     }
 
@@ -87,7 +125,7 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
 
     if config.check_only {
         result.files_with_problems += 1;
-        output::print_check_result(path, &normalize_result, config);
+        output::print_check_result(path, &normalize_result, config, ctx);
     } else {
         // Only write if content changed (detection problems don't modify content)
         if normalize_result.has_changes() {
@@ -96,7 +134,7 @@ fn process_file(path: &Path, config: &Config, result: &mut RunResult) -> io::Res
         }
         // Print fix result if there were changes or detection problems
         if normalize_result.has_changes() || has_detection_problems {
-            output::print_fix_result(path, &content, &normalize_result, config);
+            output::print_fix_result(path, &content, &normalize_result, config, ctx);
         }
     }
 
