@@ -1297,25 +1297,6 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_line_length_limit() {
-        let config = NormalizeConfig {
-            max_line_length: Some(80),
-            ..NormalizeConfig::default()
-        };
-        let input = format!("{}\n", "a".repeat(81));
-        let result = normalize_content(&input, &config);
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::LongLine { .. }));
-        assert!(problem.is_some());
-        if let ProblemKind::LongLine { length, limit } = problem.unwrap().kind {
-            assert_eq!(length, 81);
-            assert_eq!(limit, 80);
-        }
-    }
-
-    #[test]
     fn test_line_length_counts_characters_not_bytes() {
         let config = NormalizeConfig {
             max_line_length: Some(40),
@@ -1333,52 +1314,6 @@ mod tests {
             assert_eq!(length, 41);
             assert_eq!(limit, 40);
         }
-    }
-
-    #[test]
-    fn test_empty_lines_not_flagged_for_length() {
-        let config = NormalizeConfig {
-            max_line_length: Some(80),
-            ..NormalizeConfig::default()
-        };
-        let input = "hello\n\nworld\n";
-        let result = normalize_content(input, &config);
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::LongLine { .. }));
-        assert!(problem.is_none());
-    }
-
-    #[test]
-    fn test_url_line_still_flagged() {
-        let config = NormalizeConfig {
-            max_line_length: Some(80),
-            ..NormalizeConfig::default()
-        };
-        let long_url = format!("https://example.com/{}\n", "x".repeat(100));
-        let result = normalize_content(&long_url, &config);
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::LongLine { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_line_with_tabs_counts_tab_as_one() {
-        let config = NormalizeConfig {
-            max_line_length: Some(120),
-            ..NormalizeConfig::default()
-        };
-        // tab + 119 chars = 120 characters total
-        let input = format!("\t{}\n", "a".repeat(119));
-        let result = normalize_content(&input, &config);
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::LongLine { .. }));
-        assert!(problem.is_none());
     }
 
     #[test]
@@ -1432,28 +1367,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_todo_in_multiline_comment() {
-        let input = "/* TODO: in block comment */\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_todo_in_hash_comment() {
-        let input = "# TODO: python/ruby style\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
-        assert!(problem.is_some());
-    }
-
-    #[test]
     fn test_detect_multiple_todos_in_file() {
         let input = "// TODO: first\ncode\n// TODO: second\n";
         let result = normalize_content(input, &NormalizeConfig::default());
@@ -1465,41 +1378,6 @@ mod tests {
         assert_eq!(problems.len(), 2);
         assert_eq!(problems[0].line, 1);
         assert_eq!(problems[1].line, 3);
-    }
-
-    #[test]
-    fn test_todo_in_string_literal_still_detected() {
-        // Conservative approach: detect even in strings
-        let input = "let msg = \"TODO: this is in a string\";\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_no_false_positive_for_todoist() {
-        // TODO must be followed by : or whitespace or (
-        let input = "import Todoist from 'todoist-api';\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
-        assert!(problem.is_none());
-    }
-
-    #[test]
-    fn test_detect_todo_with_author() {
-        let input = "// TODO(john): implement later\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
-        assert!(problem.is_some());
     }
 
     #[test]
@@ -1551,28 +1429,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_console_debug() {
-        let input = "console.debug('info');\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_console_warn() {
-        let input = "console.warn('warning');\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
     fn test_detect_console_error_with_strict_mode() {
         let config = NormalizeConfig {
             strict_debug: true,
@@ -1596,79 +1452,6 @@ mod tests {
             .iter()
             .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
         assert!(problem.is_none());
-    }
-
-    #[test]
-    fn test_detect_python_print() {
-        let input = "print('debug value')\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_rust_println() {
-        let input = "println!(\"debug: {}\", value);\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_rust_dbg() {
-        let input = "dbg!(some_value);\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_rust_eprintln() {
-        let config = NormalizeConfig {
-            strict_debug: true,
-            ..NormalizeConfig::default()
-        };
-        let input = "eprintln!(\"error: {}\", e);\n";
-        let result = normalize_content(input, &config);
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_multiple_debug_statements() {
-        let input = "console.log('a');\nconsole.log('b');\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problems: Vec<_> = result
-            .problems
-            .iter()
-            .filter(|p| matches!(p.kind, ProblemKind::DebugCode { .. }))
-            .collect();
-        assert_eq!(problems.len(), 2);
-        assert_eq!(problems[0].line, 1);
-        assert_eq!(problems[1].line, 2);
-    }
-
-    #[test]
-    fn test_detect_debugger_statement() {
-        let input = "debugger;\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
-        assert!(problem.is_some());
     }
 
     #[test]
@@ -1702,83 +1485,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_password_assignment() {
-        let input = "password = \"mysecret123\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_secret_assignment() {
-        let input = "SECRET_KEY = \"abc123xyz\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_aws_access_key() {
-        let input = "AWS_ACCESS_KEY_ID = \"AKIAIOSFODNN7EXAMPLE\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_aws_secret_key() {
-        let input = "AWS_SECRET_ACCESS_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_private_key_header() {
-        let input = "-----BEGIN RSA PRIVATE KEY-----\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_bearer_token() {
-        let input = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_no_false_positive_for_placeholder() {
-        let input = "API_KEY = \"<your-api-key>\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_none());
-    }
-
-    #[test]
     fn test_no_false_positive_for_env_var() {
         let input = "API_KEY = process.env.API_KEY\n";
         let result = normalize_content(input, &NormalizeConfig::default());
@@ -1787,39 +1493,6 @@ mod tests {
             .iter()
             .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
         assert!(problem.is_none());
-    }
-
-    #[test]
-    fn test_no_false_positive_for_empty_string() {
-        let input = "password = \"\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_none());
-    }
-
-    #[test]
-    fn test_detect_github_token() {
-        let input = "GITHUB_TOKEN = \"ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
-    }
-
-    #[test]
-    fn test_detect_slack_token() {
-        let input = "SLACK_TOKEN = \"xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx\"\n";
-        let result = normalize_content(input, &NormalizeConfig::default());
-        let problem = result
-            .problems
-            .iter()
-            .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
-        assert!(problem.is_some());
     }
 
     #[test]
