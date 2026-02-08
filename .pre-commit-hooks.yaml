@@ -1,0 +1,13 @@
+- id: fini
+  name: fini
+  description: Normalize file formatting (whitespace, line endings, EOF newline)
+  entry: fini
+  language: system
+  types: [text]
+
+- id: fini-check
+  name: fini (check mode)
+  description: Check file formatting without modifications
+  entry: fini --check
+  language: system
+  types: [text]

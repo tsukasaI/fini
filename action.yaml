@@ -1,0 +1,69 @@
+name: 'fini'
+description: 'Run fini file normalization tool'
+author: 'tsukasaI'
+
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of fini to use (default: latest)'
+    required: false
+    default: 'latest'
+  files:
+    description: 'Files or directories to check'
+    required: false
+    default: '.'
+  check:
+    description: 'Run in check mode (fail if issues found)'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine version
+      id: version
+      shell: bash
+      run: |
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          VERSION=$(curl -sL https://api.github.com/repos/tsukasaI/fini/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+        else
+          VERSION="${{ inputs.version }}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Download fini
+      shell: bash
+      run: |
+        VERSION=${{ steps.version.outputs.version }}
+        ARCH=$(uname -m)
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+        if [ "$OS" = "darwin" ]; then
+          if [ "$ARCH" = "arm64" ]; then
+            TARGET="aarch64-apple-darwin"
+          else
+            TARGET="x86_64-apple-darwin"
+          fi
+        else
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          else
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+        fi
+
+        curl -sL "https://github.com/tsukasaI/fini/releases/download/${VERSION}/fini-${TARGET}.tar.gz" | tar xz
+        chmod +x fini
+        echo "$PWD" >> $GITHUB_PATH
+
+    - name: Run fini
+      shell: bash
+      run: |
+        if [ "${{ inputs.check }}" = "true" ]; then
+          fini --check ${{ inputs.files }}
+        else
+          fini ${{ inputs.files }}
+        fi

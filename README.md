@@ -29,6 +29,22 @@ brew install tsukasaI/tap/fini
 ### Pre-built binaries
 Download from [GitHub Releases](https://github.com/tsukasaI/fini/releases).
 
+### Pre-commit / Prek
+
+Add to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/tsukasaI/fini
+    rev: v0.1.0  # Use the latest release tag
+    hooks:
+      - id: fini        # Auto-fix mode
+      # or
+      - id: fini-check  # Check-only mode (for CI)
+```
+
+Note: Requires fini to be installed (`cargo install fini` or via Homebrew/Nix).
+
 ## Usage
 
 ```bash
@@ -120,6 +136,26 @@ Add to `.claude/settings.json`:
   }
 }
 ```
+
+## GitHub Action
+
+```yaml
+- uses: tsukasaI/fini@v1
+```
+
+### Options
+
+```yaml
+- uses: tsukasaI/fini@v1
+  with:
+    files: 'src/ tests/'    # Files/directories to check (default: .)
+    check: 'true'           # Check mode, fail if issues found (default: true)
+    version: 'v0.1.0'       # Specific version (default: latest)
+```
+
+## VS Code Extension
+
+See [editors/vscode](./editors/vscode) for a VS Code extension that runs fini on save.
 
 ## Exit codes
 
