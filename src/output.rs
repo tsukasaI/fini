@@ -64,7 +64,7 @@ pub fn print_check_result(
         path.display()
     );
 
-    if result.original != result.content {
+    if result.has_changes() {
         // Check what kind of changes were made
         if !result.original.ends_with('\n') && result.content.ends_with('\n') {
             println!("  - missing EOF newline");
@@ -104,7 +104,6 @@ pub fn print_check_result(
             ProblemKind::CodeBlockRemnant => {
                 println!("  - code block remnant at line {}", problem.line);
             }
-            // Phase 3: Human Error Prevention
             ProblemKind::TodoComment => {
                 println!("  - TODO comment at line {}", problem.line);
             }

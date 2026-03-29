@@ -1,8 +1,17 @@
-/// Full-width space character (U+3000)
-const FULLWIDTH_SPACE: char = '\u{3000}';
+mod detect;
+mod fix;
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use detect::{
+    check_line_length, detect_debug_code, detect_fixme_comments, detect_secret_patterns,
+    detect_todo_comments,
+};
+use fix::{
+    fix_fullwidth_spaces, limit_consecutive_blank_lines, normalize_eof_newline,
+    normalize_line_endings, remove_code_block_remnants, remove_leading_blank_lines,
+    remove_trailing_whitespace, remove_zero_width_chars,
+};
 
 /// Configuration for normalization rules
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,7 +24,6 @@ pub struct NormalizeConfig {
     pub remove_leading_blanks: bool,
     /// Remove code block remnants (default: false)
     pub fix_code_blocks: bool,
-    // Phase 3: Human Error Prevention
     /// Detect TODO comments (default: true)
     pub detect_todos: bool,
     /// Detect FIXME comments (default: true)
@@ -37,7 +45,6 @@ impl Default for NormalizeConfig {
             remove_zero_width: true,
             remove_leading_blanks: true,
             fix_code_blocks: false,
-            // Phase 3: Human Error Prevention
             detect_todos: true,
             detect_fixmes: true,
             detect_debug: true,
@@ -46,466 +53,6 @@ impl Default for NormalizeConfig {
             max_line_length: None,
         }
     }
-}
-
-/// Normalize file content according to fini rules
-pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeResult {
-    let mut result = content.to_string();
-    let mut problems = vec![];
-
-    // Line ending normalization (CRLF/CR → LF)
-    result = normalize_line_endings(&result);
-
-    // Zero-width character removal (before leading blank removal to track correct positions)
-    if config.remove_zero_width {
-        let (fixed, zw_problems) = remove_zero_width_chars(&result);
-        result = fixed;
-        problems.extend(zw_problems);
-    }
-
-    // Leading blank lines removal (before other normalizations)
-    if config.remove_leading_blanks {
-        let (fixed, leading_problems) = remove_leading_blank_lines(&result);
-        result = fixed;
-        problems.extend(leading_problems);
-    }
-
-    // Consecutive blank line limiting (before other normalizations)
-    if let Some(max) = config.max_blank_lines {
-        let (fixed, blank_problems) = limit_consecutive_blank_lines(&result, max);
-        result = fixed;
-        problems.extend(blank_problems);
-    }
-
-    // Code block remnant removal (opt-in)
-    if config.fix_code_blocks {
-        let (fixed, code_block_problems) = remove_code_block_remnants(&result);
-        result = fixed;
-        problems.extend(code_block_problems);
-    }
-
-    // Full-width space detection and fix
-    let (fixed, fullwidth_problems) = fix_fullwidth_spaces(&result);
-    result = fixed;
-    problems.extend(fullwidth_problems);
-
-    // Trailing whitespace removal
-    result = remove_trailing_whitespace(&result);
-
-    // EOF newline normalization
-    result = normalize_eof_newline(&result);
-
-    // Phase 3: Human Error Prevention (detection only, no auto-fix)
-    if config.detect_todos {
-        let todo_problems = detect_todo_comments(&result);
-        problems.extend(todo_problems);
-    }
-
-    if config.detect_fixmes {
-        let fixme_problems = detect_fixme_comments(&result);
-        problems.extend(fixme_problems);
-    }
-
-    if config.detect_debug {
-        let debug_problems = detect_debug_code(&result, config.strict_debug);
-        problems.extend(debug_problems);
-    }
-
-    if config.detect_secrets {
-        let secret_problems = detect_secret_patterns(&result);
-        problems.extend(secret_problems);
-    }
-
-    if let Some(max_length) = config.max_line_length {
-        let long_line_problems = check_line_length(&result, max_length);
-        problems.extend(long_line_problems);
-    }
-
-    NormalizeResult {
-        original: content.to_string(),
-        content: result,
-        problems,
-    }
-}
-
-fn normalize_line_endings(content: &str) -> String {
-    // First convert CRLF to LF, then CR to LF
-    content.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-fn fix_fullwidth_spaces(content: &str) -> (String, Vec<Problem>) {
-    let problems: Vec<Problem> = content
-        .lines()
-        .enumerate()
-        .flat_map(|(line_idx, line)| {
-            let count = line.chars().filter(|&c| c == FULLWIDTH_SPACE).count();
-            std::iter::repeat_n(
-                Problem {
-                    line: line_idx + 1,
-                    kind: ProblemKind::FullWidthSpace,
-                },
-                count,
-            )
-        })
-        .collect();
-
-    let result = content.replace(FULLWIDTH_SPACE, " ");
-    (result, problems)
-}
-
-fn remove_trailing_whitespace(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| line.trim_end_matches([' ', '\t']))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn normalize_eof_newline(content: &str) -> String {
-    if content.is_empty() {
-        return String::new();
-    }
-    let trimmed = content.trim_end_matches('\n');
-    format!("{trimmed}\n")
-}
-
-fn remove_leading_blank_lines(content: &str) -> (String, Vec<Problem>) {
-    let lines: Vec<&str> = content.lines().collect();
-    let first_non_blank = lines
-        .iter()
-        .position(|line| !line.trim().is_empty())
-        .unwrap_or(lines.len());
-
-    let problems = if first_non_blank > 0 {
-        vec![Problem {
-            line: 1,
-            kind: ProblemKind::LeadingBlankLines {
-                count: first_non_blank,
-            },
-        }]
-    } else {
-        vec![]
-    };
-
-    // All lines are blank if first_non_blank >= lines.len()
-    let result = lines
-        .get(first_non_blank..)
-        .map_or(String::new(), |rest| rest.join("\n"));
-
-    (result, problems)
-}
-
-fn limit_consecutive_blank_lines(content: &str, max: usize) -> (String, Vec<Problem>) {
-    let mut problems = vec![];
-    let mut result_lines = vec![];
-    let mut blank_count = 0;
-    let mut problem_start_line = 0;
-
-    for (line_idx, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            blank_count += 1;
-            if blank_count <= max {
-                result_lines.push(line);
-            } else if blank_count == max + 1 {
-                // Record the start of excessive blank lines
-                problem_start_line = line_idx + 1;
-            }
-        } else {
-            if blank_count > max {
-                // Record the problem
-                problems.push(Problem {
-                    line: problem_start_line,
-                    kind: ProblemKind::ExcessiveBlankLines {
-                        found: blank_count,
-                        limit: max,
-                    },
-                });
-            }
-            blank_count = 0;
-            result_lines.push(line);
-        }
-    }
-
-    // Handle trailing blank lines
-    if blank_count > max {
-        problems.push(Problem {
-            line: problem_start_line,
-            kind: ProblemKind::ExcessiveBlankLines {
-                found: blank_count,
-                limit: max,
-            },
-        });
-    }
-
-    (result_lines.join("\n"), problems)
-}
-
-fn remove_code_block_remnants(content: &str) -> (String, Vec<Problem>) {
-    let mut problems = vec![];
-    let mut result_lines = vec![];
-
-    for (line_idx, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
-
-        // Check if this line looks like a markdown code fence
-        // Valid code fences: ```, ```rust, ```python, ``` (with trailing space)
-        if let Some(after_backticks) = trimmed.strip_prefix("```") {
-            // A valid fence has nothing or just a language identifier after the backticks
-            // Language identifiers are alphanumeric with optional - or +
-            let is_valid_fence = after_backticks.is_empty()
-                || after_backticks
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '+' || c.is_whitespace());
-
-            if is_valid_fence {
-                problems.push(Problem {
-                    line: line_idx + 1,
-                    kind: ProblemKind::CodeBlockRemnant,
-                });
-                // Skip this line (don't add to result)
-                continue;
-            }
-        }
-
-        result_lines.push(line);
-    }
-
-    (result_lines.join("\n"), problems)
-}
-
-/// Check if a marker (TODO/FIXME) is followed by a valid delimiter
-fn is_valid_marker(line: &str, marker: &str) -> bool {
-    let upper = line.to_uppercase();
-    if let Some(pos) = upper.find(marker) {
-        let after = upper.chars().nth(pos + marker.len());
-        matches!(after, Some(':') | Some(' ') | Some('\t') | Some('(') | None)
-    } else {
-        false
-    }
-}
-
-fn detect_comment_markers(content: &str, marker: &str, kind: ProblemKind) -> Vec<Problem> {
-    content
-        .lines()
-        .enumerate()
-        .filter_map(|(line_idx, line)| {
-            if is_valid_marker(line, marker) {
-                Some(Problem {
-                    line: line_idx + 1,
-                    kind: kind.clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn detect_todo_comments(content: &str) -> Vec<Problem> {
-    detect_comment_markers(content, "TODO", ProblemKind::TodoComment)
-}
-
-fn detect_fixme_comments(content: &str) -> Vec<Problem> {
-    detect_comment_markers(content, "FIXME", ProblemKind::FixmeComment)
-}
-
-/// Debug patterns to detect
-const DEBUG_PATTERNS: &[&str] = &[
-    "console.log(",
-    "console.debug(",
-    "console.warn(",
-    "console.info(",
-    "console.trace(",
-    "console.table(",
-    "console.dir(",
-    "print(",
-    "println!(",
-    "dbg!(",
-    "debugger",
-];
-
-fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem> {
-    let patterns: &[&str] = if strict_mode {
-        &[
-            "console.log(",
-            "console.debug(",
-            "console.warn(",
-            "console.info(",
-            "console.trace(",
-            "console.table(",
-            "console.dir(",
-            "console.error(",
-            "print(",
-            "println!(",
-            "dbg!(",
-            "eprintln!(",
-            "debugger",
-        ]
-    } else {
-        DEBUG_PATTERNS
-    };
-
-    content
-        .lines()
-        .enumerate()
-        .filter_map(|(line_idx, line)| {
-            patterns
-                .iter()
-                .find(|p| line.contains(*p))
-                .map(|pattern| Problem {
-                    line: line_idx + 1,
-                    kind: ProblemKind::DebugCode {
-                        pattern: pattern.trim_end_matches('(').to_string(),
-                    },
-                })
-        })
-        .collect()
-}
-
-/// Secret patterns with their hints
-struct SecretPattern {
-    regex: Regex,
-    hint: &'static str,
-}
-
-fn get_secret_patterns() -> Vec<SecretPattern> {
-    vec![
-        // Private key headers
-        SecretPattern {
-            regex: Regex::new(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap(),
-            hint: "private key",
-        },
-        // AWS Access Key ID (starts with AKIA)
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(aws[_-]?)?access[_-]?key[_-]?id\s*[=:]\s*["']?AKIA[A-Z0-9]{16}["']?"#).unwrap(),
-            hint: "AWS access key",
-        },
-        // AWS Secret Access Key
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(aws[_-]?)?secret[_-]?access[_-]?key\s*[=:]\s*["'][a-zA-Z0-9/+]{20,}["']"#).unwrap(),
-            hint: "AWS secret key",
-        },
-        // Generic secret/password/api_key with hardcoded value (8+ chars)
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(password|passwd|secret[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token)\s*[=:]\s*["'][a-zA-Z0-9_\-/+@#$%^&*!~.]{8,}["']"#).unwrap(),
-            hint: "hardcoded secret",
-        },
-        // Bearer token
-        SecretPattern {
-            regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9_\-\.]{20,}").unwrap(),
-            hint: "bearer token",
-        },
-        // GitHub personal access token (ghp_)
-        SecretPattern {
-            regex: Regex::new(r"ghp_[a-zA-Z0-9]{36,}").unwrap(),
-            hint: "GitHub token",
-        },
-        // Slack token (xoxb-, xoxp-, xoxa-)
-        SecretPattern {
-            regex: Regex::new(r"xox[bpa]-[a-zA-Z0-9\-]{10,}").unwrap(),
-            hint: "Slack token",
-        },
-        // Stripe API key (sk_live_, sk_test_)
-        SecretPattern {
-            regex: Regex::new(r"sk_(live|test)_[a-zA-Z0-9]{20,}").unwrap(),
-            hint: "Stripe API key",
-        },
-    ]
-}
-
-/// Patterns that indicate environment variable usage or placeholders (not real secrets)
-const SECRET_SKIP_PATTERNS: &[&str] = &[
-    "process.env",
-    "os.environ",
-    "std::env",
-    "getenv",
-    "ENV[",
-    "<your-",
-    "${",
-    "{{",
-];
-
-fn detect_secret_patterns(content: &str) -> Vec<Problem> {
-    let patterns = get_secret_patterns();
-
-    content
-        .lines()
-        .enumerate()
-        .filter_map(|(line_idx, line)| {
-            // Skip lines with environment variables or placeholders
-            if SECRET_SKIP_PATTERNS.iter().any(|p| line.contains(p)) {
-                return None;
-            }
-
-            patterns
-                .iter()
-                .find(|p| p.regex.is_match(line))
-                .map(|pattern| Problem {
-                    line: line_idx + 1,
-                    kind: ProblemKind::SecretPattern {
-                        hint: pattern.hint.to_string(),
-                    },
-                })
-        })
-        .collect()
-}
-
-fn check_line_length(content: &str, max_length: usize) -> Vec<Problem> {
-    content
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| line.chars().count() > max_length)
-        .map(|(line_idx, line)| Problem {
-            line: line_idx + 1,
-            kind: ProblemKind::LongLine {
-                length: line.chars().count(),
-                limit: max_length,
-            },
-        })
-        .collect()
-}
-
-/// Zero-width characters to remove (except BOM at file start)
-const ZERO_WIDTH_CHARS: &[char] = &[
-    '\u{200B}', // Zero Width Space (ZWSP)
-    '\u{200C}', // Zero Width Non-Joiner (ZWNJ)
-    '\u{200D}', // Zero Width Joiner (ZWJ)
-    '\u{200E}', // Left-to-Right Mark
-    '\u{200F}', // Right-to-Left Mark
-    '\u{2060}', // Word Joiner
-    '\u{FEFF}', // Byte Order Mark (BOM) - removed except at file start
-];
-
-fn remove_zero_width_chars(content: &str) -> (String, Vec<Problem>) {
-    let mut problems = vec![];
-    let mut result = String::with_capacity(content.len());
-    let mut char_idx = 0;
-
-    for (line_idx, line) in content.lines().enumerate() {
-        for ch in line.chars() {
-            let is_zero_width = ZERO_WIDTH_CHARS.contains(&ch);
-            let is_bom_at_start = ch == '\u{FEFF}' && char_idx == 0;
-
-            if is_zero_width && !is_bom_at_start {
-                problems.push(Problem {
-                    line: line_idx + 1,
-                    kind: ProblemKind::ZeroWidthCharacter,
-                });
-            } else {
-                result.push(ch);
-            }
-            char_idx += 1;
-        }
-        result.push('\n');
-        char_idx += 1; // for the newline
-    }
-
-    // Remove the trailing newline we added (EOF normalization handles this)
-    if result.ends_with('\n') && !content.ends_with('\n') {
-        result.pop();
-    }
-
-    (result, problems)
 }
 
 #[derive(Debug, Clone)]
@@ -534,7 +81,6 @@ pub enum ProblemKind {
     ZeroWidthCharacter,
     ExcessiveBlankLines { found: usize, limit: usize },
     CodeBlockRemnant,
-    // Phase 3: Human Error Prevention
     TodoComment,
     FixmeComment,
     DebugCode { pattern: String },
@@ -556,12 +102,78 @@ impl ProblemKind {
     }
 }
 
+/// Normalize file content according to fini rules
+pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeResult {
+    let mut result = content.to_string();
+    let mut problems = vec![];
+
+    result = normalize_line_endings(&result);
+
+    if config.remove_zero_width {
+        let (fixed, zw_problems) = remove_zero_width_chars(&result);
+        result = fixed;
+        problems.extend(zw_problems);
+    }
+
+    if config.remove_leading_blanks {
+        let (fixed, leading_problems) = remove_leading_blank_lines(&result);
+        result = fixed;
+        problems.extend(leading_problems);
+    }
+
+    if let Some(max) = config.max_blank_lines {
+        let (fixed, blank_problems) = limit_consecutive_blank_lines(&result, max);
+        result = fixed;
+        problems.extend(blank_problems);
+    }
+
+    if config.fix_code_blocks {
+        let (fixed, code_block_problems) = remove_code_block_remnants(&result);
+        result = fixed;
+        problems.extend(code_block_problems);
+    }
+
+    let (fixed, fullwidth_problems) = fix_fullwidth_spaces(&result);
+    result = fixed;
+    problems.extend(fullwidth_problems);
+
+    result = remove_trailing_whitespace(&result);
+    result = normalize_eof_newline(&result);
+
+    // Detection only (no auto-fix)
+    if config.detect_todos {
+        problems.extend(detect_todo_comments(&result));
+    }
+
+    if config.detect_fixmes {
+        problems.extend(detect_fixme_comments(&result));
+    }
+
+    if config.detect_debug {
+        problems.extend(detect_debug_code(&result, config.strict_debug));
+    }
+
+    if config.detect_secrets {
+        problems.extend(detect_secret_patterns(&result));
+    }
+
+    if let Some(max_length) = config.max_line_length {
+        problems.extend(check_line_length(&result, max_length));
+    }
+
+    NormalizeResult {
+        original: content.to_string(),
+        content: result,
+        problems,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // ===========================================
-    // Phase 1.1: EOF Newline Normalization
+    // EOF Newline Normalization
     // ===========================================
 
     #[test]
@@ -593,7 +205,7 @@ mod tests {
     }
 
     // ===========================================
-    // Phase 1.2: Line Ending Normalization
+    // Line Ending Normalization
     // ===========================================
 
     #[test]
@@ -625,7 +237,7 @@ mod tests {
     }
 
     // ===========================================
-    // Phase 1.3: Trailing Whitespace Removal
+    // Trailing Whitespace Removal
     // ===========================================
 
     #[test]
@@ -664,12 +276,12 @@ mod tests {
     }
 
     // ===========================================
-    // Phase 1.4: Full-width Space Detection/Fix
+    // Full-width Space Detection/Fix
     // ===========================================
 
     #[test]
     fn test_detect_fullwidth_space() {
-        let input = "hello\u{3000}world\n"; // U+3000 is full-width space
+        let input = "hello\u{3000}world\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert!(result
             .problems
@@ -712,12 +324,12 @@ mod tests {
     }
 
     // ===========================================
-    // has_changes() tests
+    // has_changes()
     // ===========================================
 
     #[test]
     fn test_has_changes_when_content_modified() {
-        let input = "hello"; // missing EOF newline
+        let input = "hello";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert!(result.has_changes());
     }
@@ -999,7 +611,6 @@ mod tests {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
         };
-        // This should NOT be removed because it's not a valid fence pattern
         let input = "let s = \"use ```code``` blocks\";\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "let s = \"use ```code``` blocks\";\n");
@@ -1026,8 +637,8 @@ mod tests {
             .filter(|p| matches!(p.kind, ProblemKind::CodeBlockRemnant))
             .collect();
         assert_eq!(problems.len(), 2);
-        assert_eq!(problems[0].line, 2); // ```rust
-        assert_eq!(problems[1].line, 4); // ```
+        assert_eq!(problems[0].line, 2);
+        assert_eq!(problems[1].line, 4);
     }
 
     #[test]
@@ -1036,7 +647,6 @@ mod tests {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
         };
-        // Test various language identifiers
         for lang in &["python", "javascript", "c++", "c-sharp", ""] {
             let input = format!("```{}\ncode\n", lang);
             let result = normalize_content(&input, &config);
@@ -1052,13 +662,11 @@ mod tests {
     fn test_file_with_only_blank_lines() {
         let input = "\n\n\n";
         let result = normalize_content(input, &NormalizeConfig::default());
-        // All blank lines removed, empty file gets no EOF newline
         assert_eq!(result.content, "");
     }
 
     #[test]
     fn test_whitespace_only_lines_at_start() {
-        // Lines with only spaces/tabs should be treated as blank
         let input = "   \n\t\n  \t  \nhello\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "hello\n");
@@ -1092,7 +700,6 @@ mod tests {
 
     #[test]
     fn test_bom_on_second_line_removed() {
-        // BOM should only be preserved at very start of file
         let input = "line1\n\u{FEFF}line2\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "line1\nline2\n");
@@ -1124,10 +731,8 @@ mod tests {
             remove_leading_blanks: false,
             ..NormalizeConfig::default()
         };
-        // Trailing blank lines are handled by EOF normalization, not blank line limit
         let input = "hello\n\n\n\n";
         let result = normalize_content(input, &config);
-        // EOF normalization reduces to single newline
         assert_eq!(result.content, "hello\n");
     }
 
@@ -1139,7 +744,6 @@ mod tests {
         };
         let input = "a\n   \n\t\n  \nb\n";
         let result = normalize_content(input, &config);
-        // Whitespace-only lines count as blank
         assert_eq!(result.content, "a\n\nb\n");
     }
 
@@ -1152,7 +756,6 @@ mod tests {
         };
         let input = "\n\n\na\n\n\n\nb\n";
         let result = normalize_content(input, &config);
-        // Leading blanks removed first, then blank limit applied
         assert_eq!(result.content, "a\n\nb\n");
     }
 
@@ -1166,7 +769,6 @@ mod tests {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
         };
-        // Indented code fences should also be detected
         let input = "  ```rust\ncode\n  ```\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "code\n");
@@ -1178,7 +780,6 @@ mod tests {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
         };
-        // Numbers after ``` are valid language identifiers
         let input = "```123\ncode\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "code\n");
@@ -1190,7 +791,6 @@ mod tests {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
         };
-        // Backticks with content before should not be removed
         let input = "some text ```\ncode\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "some text ```\ncode\n");
@@ -1202,8 +802,6 @@ mod tests {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
         };
-        // Four backticks is a different fence type, not caught by ``` detection
-        // After stripping ```, we get `rust which contains a backtick
         let input = "````rust\ncode\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "````rust\ncode\n");
@@ -1234,14 +832,13 @@ mod tests {
             remove_zero_width: true,
             ..NormalizeConfig::default()
         };
-        // Zero-width chars are removed first, then code fence detection
         let input = "```\u{200B}rust\ncode\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "code\n");
     }
 
     // ===========================================
-    // Phase 3.4: Long Line Detection
+    // Long Line Detection
     // ===========================================
 
     #[test]
@@ -1302,7 +899,6 @@ mod tests {
             max_line_length: Some(40),
             ..NormalizeConfig::default()
         };
-        // 41 Japanese chars = 123 bytes, but should count as 41 characters
         let input = format!("{}\n", "あ".repeat(41));
         let result = normalize_content(&input, &config);
         let problem = result
@@ -1328,7 +924,7 @@ mod tests {
     }
 
     // ===========================================
-    // Phase 3.1: TODO/FIXME Detection
+    // TODO/FIXME Detection
     // ===========================================
 
     #[test]
@@ -1411,7 +1007,7 @@ mod tests {
     }
 
     // ===========================================
-    // Phase 3.2: Debug Code Detection
+    // Debug Code Detection
     // ===========================================
 
     #[test]
@@ -1470,7 +1066,7 @@ mod tests {
     }
 
     // ===========================================
-    // Phase 3.3: Secret Pattern Detection
+    // Secret Pattern Detection
     // ===========================================
 
     #[test]

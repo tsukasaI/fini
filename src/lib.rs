@@ -36,14 +36,10 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         warnings: 0,
     };
 
-    // Count files for progress bar (2-pass approach)
-    let file_count: u64 = walk_paths(paths).filter_map(|r| r.ok()).count() as u64;
+    let file_paths: Vec<_> = walk_paths(paths).filter_map(|r| r.ok()).collect();
+    let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
-    let progress = ProgressReporter::new(file_count, ctx.show_progress);
-
-    for path in walk_paths(paths) {
-        let path = path?;
-
+    for path in file_paths {
         // Update progress bar message with current file name
         if let Some(name) = path.file_name() {
             progress.set_message(&name.to_string_lossy());
