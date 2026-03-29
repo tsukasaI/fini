@@ -14,6 +14,7 @@ pub struct Config {
     pub check_only: bool,
     pub output_mode: OutputMode,
     pub normalize: NormalizeConfig,
+    pub exclude_patterns: Vec<String>,
 }
 
 pub struct OutputContext {

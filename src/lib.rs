@@ -36,7 +36,9 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         warnings: 0,
     };
 
-    let file_paths: Vec<_> = walk_paths(paths).filter_map(|r| r.ok()).collect();
+    let file_paths: Vec<_> = walk_paths(paths, &config.exclude_patterns)
+        .filter_map(|r| r.ok())
+        .collect();
     let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
     for path in file_paths {

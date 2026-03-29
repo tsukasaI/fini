@@ -8,6 +8,10 @@ pub struct FiniToml {
     /// Normalization settings
     #[serde(default)]
     pub normalize: NormalizeSection,
+
+    /// File exclusion patterns (gitignore-style globs)
+    #[serde(default)]
+    pub exclude: Option<Vec<String>>,
 }
 
 /// `[normalize]` section in fini.toml
@@ -25,7 +29,6 @@ pub struct NormalizeSection {
     /// Remove code block remnants (default: false)
     pub fix_code_blocks: Option<bool>,
 
-    // Phase 3: Human Error Prevention
     /// Detect TODO comments (default: true)
     pub detect_todos: Option<bool>,
 

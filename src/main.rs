@@ -65,7 +65,6 @@ struct Cli {
     #[arg(long)]
     fix_code_blocks: bool,
 
-    // Phase 3: Human Error Prevention
     /// Skip TODO comment detection
     #[arg(long)]
     no_detect_todos: bool,
@@ -89,6 +88,10 @@ struct Cli {
     /// Maximum line length (warn if exceeded)
     #[arg(long, value_name = "N")]
     max_line_length: Option<usize>,
+
+    /// Exclude files matching glob pattern (gitignore syntax, repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    exclude: Vec<String>,
 
     /// Generate a template fini.toml configuration file
     #[arg(long)]
@@ -135,10 +138,21 @@ fn main() -> ExitCode {
         OutputMode::Normal
     };
 
+    // Merge exclude patterns: CLI --exclude takes precedence, else TOML exclude
+    let exclude_patterns = if !cli.exclude.is_empty() {
+        cli.exclude.clone()
+    } else {
+        toml_config
+            .as_ref()
+            .and_then(|c| c.exclude.clone())
+            .unwrap_or_default()
+    };
+
     let config = Config {
         check_only: cli.check,
         output_mode,
         normalize,
+        exclude_patterns,
     };
 
     // Determine color, verbose, and progress settings
@@ -260,7 +274,6 @@ fn build_cli_options(cli: &Cli) -> CliNormalizeOptions {
         keep_zero_width: cli.keep_zero_width.then_some(true),
         keep_leading_blanks: cli.keep_leading_blanks.then_some(true),
         fix_code_blocks: cli.fix_code_blocks.then_some(true),
-        // Phase 3: Human Error Prevention
         no_detect_todos: cli.no_detect_todos.then_some(true),
         no_detect_fixmes: cli.no_detect_fixmes.then_some(true),
         no_detect_debug: cli.no_detect_debug.then_some(true),

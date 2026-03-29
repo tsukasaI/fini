@@ -70,6 +70,7 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --keep-zero-width       Keep zero-width characters (default: remove)
 --keep-leading-blanks   Keep leading blank lines (default: remove)
 --fix-code-blocks       Remove code block remnants (```lang markers)
+--exclude <PATTERN>     Exclude files matching glob pattern (repeatable)
 --init                  Generate fini.toml configuration template
 --config <PATH>         Use specific config file
 ```
@@ -79,6 +80,9 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 Create `fini.toml` in your project root (or run `fini --init`):
 
 ```toml
+# Exclude files matching these patterns (gitignore-style globs)
+# exclude = ["vendor/", "node_modules/", "*.min.js"]
+
 [normalize]
 max_blank_lines = 2        # Limit consecutive blank lines
 remove_zero_width = true   # Remove zero-width characters

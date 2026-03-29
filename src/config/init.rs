@@ -35,6 +35,15 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # Enable when extracting code from AI assistant responses.
 # Default: false
 # fix_code_blocks = false
+
+# Exclude files matching these patterns (gitignore-style globs).
+# CLI --exclude flags override this list.
+# exclude = [
+#     "vendor/",
+#     "node_modules/",
+#     "*.min.js",
+#     "*.min.css",
+# ]
 "#;
 
 /// Generate fini.toml in the specified directory (or current directory if None).

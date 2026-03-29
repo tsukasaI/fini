@@ -1,20 +1,43 @@
+use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 use std::io;
 use std::path::PathBuf;
 
-/// Walk paths and yield file paths, respecting gitignore
-pub fn walk_paths(paths: &[String]) -> impl Iterator<Item = io::Result<PathBuf>> {
+/// Walk paths and yield file paths, respecting gitignore and custom exclude patterns.
+///
+/// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js").
+pub fn walk_paths(
+    paths: &[String],
+    exclude_patterns: &[String],
+) -> impl Iterator<Item = io::Result<PathBuf>> {
     let mut all_files = vec![];
 
     for path in paths {
-        let walker = WalkBuilder::new(path)
-            .hidden(true) // Skip hidden files
-            .git_ignore(true) // Respect .gitignore
+        let mut builder = WalkBuilder::new(path);
+        builder
+            .hidden(true)
+            .git_ignore(true)
             .git_global(true)
-            .git_exclude(true)
-            .build();
+            .git_exclude(true);
 
-        for entry in walker {
+        if !exclude_patterns.is_empty() {
+            let mut overrides = OverrideBuilder::new(path);
+            for pattern in exclude_patterns {
+                // OverrideBuilder uses inverted ! semantics:
+                // !pattern = exclude, pattern = whitelist
+                if let Err(e) = overrides.add(&format!("!{pattern}")) {
+                    all_files.push(Err(io::Error::other(format!(
+                        "invalid exclude pattern '{pattern}': {e}"
+                    ))));
+                    return all_files.into_iter();
+                }
+            }
+            if let Ok(built) = overrides.build() {
+                builder.overrides(built);
+            }
+        }
+
+        for entry in builder.build() {
             match entry {
                 Ok(entry) => {
                     if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
@@ -37,10 +60,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    // ===========================================
-    // Phase 2: File Walker Tests
-    // ===========================================
-
     #[test]
     fn test_walk_single_file() {
         let dir = TempDir::new().unwrap();
@@ -48,7 +67,7 @@ mod tests {
         fs::write(&file_path, "hello").unwrap();
 
         let paths = vec![file_path.to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths).collect();
+        let files: Vec<_> = walk_paths(&paths, &[]).collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].is_ok());
@@ -62,7 +81,7 @@ mod tests {
         fs::write(dir.path().join("subdir/file2.txt"), "content2").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
 
         assert_eq!(files.len(), 2);
     }
@@ -74,7 +93,7 @@ mod tests {
         fs::write(dir.path().join(".hidden"), "hidden").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].to_string_lossy().contains("visible.txt"));
@@ -88,7 +107,7 @@ mod tests {
         fs::write(dir.path().join(".git/config"), "git config").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
 
         assert_eq!(files.len(), 1);
         assert!(!files[0].to_string_lossy().contains(".git"));
@@ -98,22 +117,54 @@ mod tests {
     fn test_respect_gitignore() {
         let dir = TempDir::new().unwrap();
 
-        // Create a .git directory so ignore crate respects .gitignore
         fs::create_dir(dir.path().join(".git")).unwrap();
         fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
         fs::write(dir.path().join("kept.txt"), "kept").unwrap();
         fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
 
-        // ignored.txt should be excluded by .gitignore rules
         assert!(files
             .iter()
             .all(|f| !f.to_string_lossy().contains("ignored.txt")));
-        // kept.txt should be present
         assert!(files
             .iter()
             .any(|f| f.to_string_lossy().contains("kept.txt")));
+    }
+
+    #[test]
+    fn test_exclude_patterns() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+        fs::write(dir.path().join("style.min.js"), "minified").unwrap();
+        fs::create_dir(dir.path().join("vendor")).unwrap();
+        fs::write(dir.path().join("vendor/lib.js"), "vendor code").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let exclude = vec!["*.min.js".to_string(), "vendor/".to_string()];
+        let files: Vec<_> = walk_paths(&paths, &exclude)
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_string_lossy().contains("main.rs"));
+    }
+
+    #[test]
+    fn test_exclude_specific_directory() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("app.js"), "app").unwrap();
+        fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
+        fs::write(dir.path().join("node_modules/pkg/index.js"), "pkg").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let exclude = vec!["node_modules/".to_string()];
+        let files: Vec<_> = walk_paths(&paths, &exclude)
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_string_lossy().contains("app.js"));
     }
 }
