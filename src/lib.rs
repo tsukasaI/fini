@@ -16,9 +16,10 @@ pub use output::{print_diff, Config, OutputContext, OutputMode, RunResult};
 pub use progress::ProgressReporter;
 pub use walker::walk_paths;
 
+use rayon::prelude::*;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const BINARY_CHECK_SIZE: usize = 8192;
 
@@ -26,6 +27,19 @@ const BINARY_CHECK_SIZE: usize = 8192;
 pub fn is_binary(content: &[u8]) -> bool {
     let check_len = content.len().min(BINARY_CHECK_SIZE);
     content[..check_len].contains(&0)
+}
+
+/// Result of processing a single file (pure data, no side effects)
+enum FileOutcome {
+    Skipped {
+        reason: &'static str,
+    },
+    Clean,
+    Changed {
+        original: String,
+        result: NormalizeResult,
+    },
+    Error(io::Error),
 }
 
 /// Main entry point: process all files in given paths
@@ -41,19 +55,62 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         .collect();
     let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
-    for path in file_paths {
-        // Update progress bar message with current file name
-        if let Some(name) = path.file_name() {
-            progress.set_message(&name.to_string_lossy());
-        }
+    // Process files in parallel (read + normalize), collect results
+    let outcomes: Vec<(PathBuf, FileOutcome)> = file_paths
+        .into_par_iter()
+        .map(|path| {
+            let outcome = process_file(&path, &config.normalize);
+            progress.inc();
+            (path, outcome)
+        })
+        .collect();
 
-        if let Err(e) = process_file(&path, config, &mut result, ctx) {
-            if ctx.mode != OutputMode::Quiet {
-                eprintln!("Error processing {}: {e}", path.display());
+    // Apply results sequentially (output + file writes + stats)
+    for (path, outcome) in &outcomes {
+        match outcome {
+            FileOutcome::Skipped { reason } => {
+                if ctx.verbose {
+                    output::print_skipped(path, reason, ctx);
+                }
+            }
+            FileOutcome::Clean => {
+                if ctx.verbose {
+                    output::print_checked(path, ctx);
+                }
+            }
+            FileOutcome::Changed {
+                original,
+                result: normalize_result,
+            } => {
+                let fullwidth_count = normalize_result
+                    .problems
+                    .iter()
+                    .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
+                    .count();
+                result.warnings += fullwidth_count;
+
+                if config.check_only {
+                    result.files_with_problems += 1;
+                    output::print_check_result(path, normalize_result, config, ctx);
+                } else {
+                    if normalize_result.has_changes() {
+                        if let Err(e) = fs::write(path, &normalize_result.content) {
+                            if ctx.mode != OutputMode::Quiet {
+                                eprintln!("Error writing {}: {e}", path.display());
+                            }
+                            continue;
+                        }
+                        result.files_fixed += 1;
+                    }
+                    output::print_fix_result(path, original, normalize_result, config, ctx);
+                }
+            }
+            FileOutcome::Error(e) => {
+                if ctx.mode != OutputMode::Quiet {
+                    eprintln!("Error processing {}: {e}", path.display());
+                }
             }
         }
-
-        progress.inc();
     }
 
     progress.finish();
@@ -63,80 +120,45 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     Ok(result)
 }
 
-fn process_file(
-    path: &Path,
-    config: &Config,
-    result: &mut RunResult,
-    ctx: &OutputContext,
-) -> io::Result<()> {
-    let bytes = fs::read(path)?;
+/// Process a single file: read, validate, normalize. Pure computation, no output.
+fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return FileOutcome::Error(e),
+    };
 
-    // Skip empty files
     if bytes.is_empty() {
-        if ctx.verbose {
-            output::print_skipped(path, "empty", ctx);
-        }
-        return Ok(());
+        return FileOutcome::Skipped { reason: "empty" };
     }
 
-    // Skip binary files
     if is_binary(&bytes) {
-        if ctx.verbose {
-            output::print_skipped(path, "binary", ctx);
-        }
-        return Ok(());
+        return FileOutcome::Skipped { reason: "binary" };
     }
 
-    // Try to read as UTF-8
     let content = match String::from_utf8(bytes) {
         Ok(s) => s,
         Err(_) => {
-            if ctx.verbose {
-                output::print_skipped(path, "non-UTF-8", ctx);
+            return FileOutcome::Skipped {
+                reason: "non-UTF-8",
             }
-            return Ok(());
         }
     };
 
-    let normalize_result = normalize_content(&content, &config.normalize);
+    let normalize_result = normalize_content(&content, normalize_config);
 
-    // Check for detection-only problems (these don't change content)
     let has_detection_problems = normalize_result
         .problems
         .iter()
         .any(|p| p.kind.is_detection_only());
 
     if !normalize_result.has_changes() && !has_detection_problems {
-        // No changes and no detection problems
-        if ctx.verbose {
-            output::print_checked(path, ctx);
-        }
-        return Ok(());
+        return FileOutcome::Clean;
     }
 
-    let fullwidth_count = normalize_result
-        .problems
-        .iter()
-        .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
-        .count();
-    result.warnings += fullwidth_count;
-
-    if config.check_only {
-        result.files_with_problems += 1;
-        output::print_check_result(path, &normalize_result, config, ctx);
-    } else {
-        // Only write if content changed (detection problems don't modify content)
-        if normalize_result.has_changes() {
-            fs::write(path, &normalize_result.content)?;
-            result.files_fixed += 1;
-        }
-        // Print fix result if there were changes or detection problems
-        if normalize_result.has_changes() || has_detection_problems {
-            output::print_fix_result(path, &content, &normalize_result, config, ctx);
-        }
+    FileOutcome::Changed {
+        original: content,
+        result: normalize_result,
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
