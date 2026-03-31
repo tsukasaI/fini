@@ -49,8 +49,8 @@ impl RunResult {
 
 pub fn print_check_result(
     path: &Path,
+    original: &str,
     result: &NormalizeResult,
-    _config: &Config,
     ctx: &OutputContext,
 ) {
     if ctx.mode == OutputMode::Quiet {
@@ -66,18 +66,11 @@ pub fn print_check_result(
     );
 
     if result.has_changes() {
-        // Check what kind of changes were made
-        if !result.original.ends_with('\n') && result.content.ends_with('\n') {
+        if !original.ends_with('\n') && result.content.ends_with('\n') {
             println!("  - missing EOF newline");
         }
 
-        // Check for trailing whitespace
-        for (i, (orig_line, _)) in result
-            .original
-            .lines()
-            .zip(result.content.lines())
-            .enumerate()
-        {
+        for (i, (orig_line, _)) in original.lines().zip(result.content.lines()).enumerate() {
             if orig_line.len() != orig_line.trim_end().len() {
                 println!("  - trailing whitespace at line {}", i + 1);
             }
@@ -131,7 +124,6 @@ pub fn print_fix_result(
     path: &Path,
     original: &str,
     result: &NormalizeResult,
-    _config: &Config,
     ctx: &OutputContext,
 ) {
     match ctx.mode {

@@ -36,7 +36,7 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/tsukasaI/fini
-    rev: v0.1.0  # Use the latest release tag
+    rev: v0.2.0  # Use the latest release tag
     hooks:
       - id: fini        # Auto-fix mode
       # or
@@ -154,7 +154,7 @@ Add to `.claude/settings.json`:
   with:
     files: 'src/ tests/'    # Files/directories to check (default: .)
     check: 'true'           # Check mode, fail if issues found (default: true)
-    version: 'v0.1.0'       # Specific version (default: latest)
+    version: 'v0.2.0'       # Specific version (default: latest)
 ```
 
 ## VS Code Extension

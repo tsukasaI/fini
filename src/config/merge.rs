@@ -152,6 +152,66 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_phase3_defaults() {
+        let cli = CliNormalizeOptions::default();
+        let config = merge_normalize_config(&cli, None);
+
+        assert!(config.detect_todos);
+        assert!(config.detect_fixmes);
+        assert!(config.detect_debug);
+        assert!(!config.strict_debug);
+        assert!(config.detect_secrets);
+        assert_eq!(config.max_line_length, None);
+    }
+
+    #[test]
+    fn test_merge_phase3_toml_overrides() {
+        let cli = CliNormalizeOptions::default();
+        let toml = NormalizeSection {
+            detect_todos: Some(false),
+            detect_debug: Some(false),
+            strict_debug: Some(true),
+            detect_secrets: Some(false),
+            max_line_length: Some(120),
+            ..Default::default()
+        };
+
+        let config = merge_normalize_config(&cli, Some(&toml));
+
+        assert!(!config.detect_todos);
+        assert!(config.detect_fixmes); // default
+        assert!(!config.detect_debug);
+        assert!(config.strict_debug);
+        assert!(!config.detect_secrets);
+        assert_eq!(config.max_line_length, Some(120));
+    }
+
+    #[test]
+    fn test_merge_phase3_cli_overrides_toml() {
+        let cli = CliNormalizeOptions {
+            no_detect_todos: Some(true),
+            no_detect_debug: Some(false), // explicitly enable
+            strict_debug: Some(true),
+            max_line_length: Some(80),
+            ..Default::default()
+        };
+        let toml = NormalizeSection {
+            detect_todos: Some(true),
+            detect_debug: Some(false),
+            strict_debug: Some(false),
+            max_line_length: Some(120),
+            ..Default::default()
+        };
+
+        let config = merge_normalize_config(&cli, Some(&toml));
+
+        assert!(!config.detect_todos); // CLI no_detect=true -> detect=false
+        assert!(config.detect_debug); // CLI no_detect=false -> detect=true
+        assert!(config.strict_debug); // CLI wins
+        assert_eq!(config.max_line_length, Some(80)); // CLI wins
+    }
+
+    #[test]
     fn test_merge_cli_only() {
         let cli = CliNormalizeOptions {
             max_blank_lines: Some(1),

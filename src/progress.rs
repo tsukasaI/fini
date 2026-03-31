@@ -22,12 +22,6 @@ impl ProgressReporter {
         Self { bar: Some(bar) }
     }
 
-    pub fn set_message(&self, msg: &str) {
-        if let Some(ref bar) = self.bar {
-            bar.set_message(msg.to_string());
-        }
-    }
-
     pub fn inc(&self) {
         if let Some(ref bar) = self.bar {
             bar.inc(1);

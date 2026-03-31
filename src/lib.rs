@@ -91,7 +91,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
 
                 if config.check_only {
                     result.files_with_problems += 1;
-                    output::print_check_result(path, normalize_result, config, ctx);
+                    output::print_check_result(path, original, normalize_result, ctx);
                 } else {
                     if normalize_result.has_changes() {
                         if let Err(e) = fs::write(path, &normalize_result.content) {
@@ -102,7 +102,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
                         }
                         result.files_fixed += 1;
                     }
-                    output::print_fix_result(path, original, normalize_result, config, ctx);
+                    output::print_fix_result(path, original, normalize_result, ctx);
                 }
             }
             FileOutcome::Error(e) => {
@@ -146,12 +146,7 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
 
     let normalize_result = normalize_content(&content, normalize_config);
 
-    let has_detection_problems = normalize_result
-        .problems
-        .iter()
-        .any(|p| p.kind.is_detection_only());
-
-    if !normalize_result.has_changes() && !has_detection_problems {
+    if !normalize_result.has_changes() && !normalize_result.has_detection_problems() {
         return FileOutcome::Clean;
     }
 

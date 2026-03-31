@@ -206,12 +206,8 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     // Normalize content
     let result = normalize_content(&input, &normalize);
 
-    // Check for detection-only problems
-    let has_detection_problems = result.problems.iter().any(|p| p.kind.is_detection_only());
-
     if cli.check {
-        // Check mode: exit 1 if there are changes or detection problems
-        if result.has_changes() || has_detection_problems {
+        if result.has_changes() || result.has_detection_problems() {
             if cli.diff {
                 // Print diff to stderr so stdout stays clean
                 print_diff("stdin", &input, &result.content);

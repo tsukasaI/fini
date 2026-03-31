@@ -536,3 +536,140 @@ detect_secrets = false
     // Should exit with 0 (TODO not flagged per config)
     assert!(output.status.success());
 }
+
+// ===========================================
+// Phase 5: Exclude Patterns
+// ===========================================
+
+#[test]
+fn test_exclude_pattern_skips_matching_files() {
+    let dir = TempDir::new().unwrap();
+    let file1 = dir.path().join("keep.txt");
+    let file2 = dir.path().join("skip.min.js");
+    fs::write(&file1, "hello").unwrap();
+    fs::write(&file2, "world").unwrap();
+
+    fini_cmd()
+        .arg("--exclude")
+        .arg("*.min.js")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(&file1).unwrap(), "hello\n");
+    assert_eq!(fs::read_to_string(&file2).unwrap(), "world"); // unchanged
+}
+
+#[test]
+fn test_exclude_directory_pattern() {
+    let dir = TempDir::new().unwrap();
+    let vendor_dir = dir.path().join("vendor");
+    fs::create_dir(&vendor_dir).unwrap();
+    let file1 = dir.path().join("main.txt");
+    let file2 = vendor_dir.join("lib.txt");
+    fs::write(&file1, "hello").unwrap();
+    fs::write(&file2, "world").unwrap();
+
+    fini_cmd()
+        .arg("--exclude")
+        .arg("vendor/")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(&file1).unwrap(), "hello\n");
+    assert_eq!(fs::read_to_string(&file2).unwrap(), "world"); // unchanged
+}
+
+#[test]
+fn test_config_exclude_patterns() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("fini.toml");
+    fs::write(
+        &config_path,
+        r#"
+exclude = ["*.log"]
+"#,
+    )
+    .unwrap();
+
+    let file1 = dir.path().join("main.txt");
+    let file2 = dir.path().join("debug.log");
+    fs::write(&file1, "hello").unwrap();
+    fs::write(&file2, "world").unwrap();
+
+    fini_cmd()
+        .current_dir(dir.path())
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(&file1).unwrap(), "hello\n");
+    assert_eq!(fs::read_to_string(&file2).unwrap(), "world"); // unchanged
+}
+
+// ===========================================
+// Stdin Mode
+// ===========================================
+
+#[test]
+fn test_stdin_normalizes_content() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"hello   \nworld")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "hello\nworld\n");
+}
+
+#[test]
+fn test_stdin_check_mode_detects_problems() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"hello   ").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_stdin_check_mode_passes_clean_input() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"hello\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+}

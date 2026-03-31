@@ -57,14 +57,18 @@ impl Default for NormalizeConfig {
 
 #[derive(Debug, Clone)]
 pub struct NormalizeResult {
-    pub original: String,
     pub content: String,
+    pub changed: bool,
     pub problems: Vec<Problem>,
 }
 
 impl NormalizeResult {
     pub fn has_changes(&self) -> bool {
-        self.original != self.content
+        self.changed
+    }
+
+    pub fn has_detection_problems(&self) -> bool {
+        self.problems.iter().any(|p| p.kind.is_detection_only())
     }
 }
 
@@ -83,8 +87,8 @@ pub enum ProblemKind {
     CodeBlockRemnant,
     TodoComment,
     FixmeComment,
-    DebugCode { pattern: String },
-    SecretPattern { hint: String },
+    DebugCode { pattern: &'static str },
+    SecretPattern { hint: &'static str },
     LongLine { length: usize, limit: usize },
 }
 
@@ -161,9 +165,11 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         problems.extend(check_line_length(&result, max_length));
     }
 
+    let changed = result != content;
+
     NormalizeResult {
-        original: content.to_string(),
         content: result,
+        changed,
         problems,
     }
 }
@@ -1020,7 +1026,7 @@ mod tests {
             .find(|p| matches!(p.kind, ProblemKind::DebugCode { .. }));
         assert!(problem.is_some());
         if let ProblemKind::DebugCode { pattern } = &problem.unwrap().kind {
-            assert_eq!(pattern, "console.log");
+            assert_eq!(*pattern, "console.log");
         }
     }
 

@@ -137,7 +137,7 @@ pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem
                 .map(|pattern| Problem {
                     line: line_idx + 1,
                     kind: ProblemKind::DebugCode {
-                        pattern: pattern.trim_end_matches('(').to_string(),
+                        pattern: pattern.trim_end_matches('('),
                     },
                 })
         })
@@ -160,9 +160,7 @@ pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
                 .find(|p| p.regex.is_match(line))
                 .map(|pattern| Problem {
                     line: line_idx + 1,
-                    kind: ProblemKind::SecretPattern {
-                        hint: pattern.hint.to_string(),
-                    },
+                    kind: ProblemKind::SecretPattern { hint: pattern.hint },
                 })
         })
         .collect()
@@ -173,6 +171,10 @@ pub(super) fn check_line_length(content: &str, max_length: usize) -> Vec<Problem
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
+            // byte length >= char count in UTF-8, so skip expensive chars().count() for short lines
+            if line.len() <= max_length {
+                return None;
+            }
             let length = line.chars().count();
             (length > max_length).then_some(Problem {
                 line: line_idx + 1,
@@ -183,4 +185,144 @@ pub(super) fn check_line_length(content: &str, max_length: usize) -> Vec<Problem
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_todo_basic() {
+        let problems = detect_todo_comments("// TODO: fix this\n");
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].line, 1);
+    }
+
+    #[test]
+    fn test_todo_case_insensitive() {
+        assert_eq!(detect_todo_comments("// todo: fix\n").len(), 1);
+        assert_eq!(detect_todo_comments("// Todo fix\n").len(), 1);
+    }
+
+    #[test]
+    fn test_todo_requires_word_boundary() {
+        assert!(detect_todo_comments("use todoist;\n").is_empty());
+    }
+
+    #[test]
+    fn test_fixme_detected() {
+        let problems = detect_fixme_comments("# FIXME: broken\n");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn test_debug_console_log() {
+        let problems = detect_debug_code("console.log('test');\n", false);
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::DebugCode { pattern } if *pattern == "console.log"
+        ));
+    }
+
+    #[test]
+    fn test_debug_dbg_macro() {
+        let problems = detect_debug_code("dbg!(value);\n", false);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn test_debug_strict_includes_console_error() {
+        assert!(detect_debug_code("console.error('fail');\n", false).is_empty());
+        assert_eq!(detect_debug_code("console.error('fail');\n", true).len(), 1);
+    }
+
+    #[test]
+    fn test_debug_strict_includes_eprintln() {
+        // Note: "eprintln!(" contains "println!(" as substring, so non-strict also matches
+        // Strict mode adds the explicit "eprintln!(" pattern
+        assert_eq!(detect_debug_code("eprintln!(\"fail\");\n", false).len(), 1);
+        assert_eq!(detect_debug_code("eprintln!(\"fail\");\n", true).len(), 1);
+    }
+
+    #[test]
+    fn test_secret_bearer_token() {
+        let problems =
+            detect_secret_patterns("Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9\n");
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::SecretPattern { hint } if *hint == "bearer token"
+        ));
+    }
+
+    #[test]
+    fn test_secret_github_token() {
+        let problems =
+            detect_secret_patterns("token = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn\"\n");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_skip_env_var_reference() {
+        assert!(detect_secret_patterns("password = process.env.PASSWORD\n").is_empty());
+        assert!(detect_secret_patterns("key = os.environ['API_KEY']\n").is_empty());
+        assert!(detect_secret_patterns("key = std::env::var(\"KEY\")\n").is_empty());
+    }
+
+    #[test]
+    fn test_secret_skip_placeholder() {
+        assert!(detect_secret_patterns("api_key = \"<your-api-key>\"\n").is_empty());
+        assert!(detect_secret_patterns("token = \"${API_TOKEN}\"\n").is_empty());
+    }
+
+    #[test]
+    fn test_line_length_under_limit() {
+        assert!(check_line_length("short\n", 80).is_empty());
+    }
+
+    #[test]
+    fn test_line_length_at_limit() {
+        let line = format!("{}\n", "a".repeat(80));
+        assert!(check_line_length(&line, 80).is_empty());
+    }
+
+    #[test]
+    fn test_line_length_over_limit() {
+        let line = format!("{}\n", "a".repeat(81));
+        let problems = check_line_length(&line, 80);
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::LongLine {
+                length: 81,
+                limit: 80
+            }
+        ));
+    }
+
+    #[test]
+    fn test_line_length_multibyte_shortcut() {
+        // 6 multibyte chars = 6 char count but 18 byte length
+        // byte length > limit but char count <= limit should pass
+        let line = "ああああああ\n"; // 6 chars, 18 bytes
+        assert!(check_line_length(line, 6).is_empty());
+        assert_eq!(check_line_length(line, 5).len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_debug_on_same_line_reports_first() {
+        let problems = detect_debug_code("console.log(dbg!(x));\n", false);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn test_is_valid_marker_boundaries() {
+        assert!(is_valid_marker("// TODO: fix", "TODO"));
+        assert!(is_valid_marker("// TODO fix", "TODO"));
+        assert!(is_valid_marker("// TODO\ttab", "TODO"));
+        assert!(is_valid_marker("// TODO(me)", "TODO"));
+        assert!(is_valid_marker("TODO", "TODO"));
+        assert!(!is_valid_marker("TODOLIST", "TODO"));
+    }
 }

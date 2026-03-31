@@ -2,7 +2,7 @@
   "name": "fini",
   "displayName": "fini - File Normalizer",
   "description": "Normalize file formatting (whitespace, line endings, trailing newlines) for AI coding agents",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "tsukasaI",
   "repository": {
     "type": "git",
