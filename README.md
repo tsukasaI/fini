@@ -115,6 +115,27 @@ fini reads `.editorconfig` and warns if settings conflict with its fixed behavio
 | Consecutive blank lines | Limit to N blank lines (`--max-blank-lines`) | Off |
 | Code block remnants | Remove ``` markers (`--fix-code-blocks`) | Off |
 
+## Inline Ignore
+
+Suppress detections per-line with `fini:ignore` directives. Works with any comment syntax.
+
+```python
+# TODO: intentional reminder fini:ignore
+print("debug") # fini:ignore debug
+
+# fini:ignore-next-line
+API_KEY = "sk_test_example"
+```
+
+| Directive | Effect |
+|-----------|--------|
+| `fini:ignore` | Suppress all detections on this line |
+| `fini:ignore todo,debug` | Suppress only listed kinds |
+| `fini:ignore-next-line` | Suppress all detections on the next line |
+| `fini:ignore-next-line secret` | Suppress only listed kinds on the next line |
+
+Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `fullwidth`, `zero-width`, `leading-blanks`, `blank-lines`, `code-block`
+
 ## Skipped
 
 - Binary files (null bytes in first 8KB)
