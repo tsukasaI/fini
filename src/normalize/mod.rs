@@ -1,5 +1,6 @@
 mod detect;
 mod fix;
+mod ignore;
 
 use serde::{Deserialize, Serialize};
 
@@ -104,6 +105,22 @@ impl ProblemKind {
                 | ProblemKind::LongLine { .. }
         )
     }
+
+    /// Returns the identifier used in `fini:ignore` directives
+    pub fn ignore_id(&self) -> &'static str {
+        match self {
+            ProblemKind::TodoComment => "todo",
+            ProblemKind::FixmeComment => "fixme",
+            ProblemKind::DebugCode { .. } => "debug",
+            ProblemKind::SecretPattern { .. } => "secret",
+            ProblemKind::LongLine { .. } => "line-length",
+            ProblemKind::FullWidthSpace => "fullwidth",
+            ProblemKind::LeadingBlankLines { .. } => "leading-blanks",
+            ProblemKind::ZeroWidthCharacter => "zero-width",
+            ProblemKind::ExcessiveBlankLines { .. } => "blank-lines",
+            ProblemKind::CodeBlockRemnant => "code-block",
+        }
+    }
 }
 
 /// Normalize file content according to fini rules
@@ -163,6 +180,14 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
 
     if let Some(max_length) = config.max_line_length {
         problems.extend(check_line_length(&result, max_length));
+    }
+
+    // Filter out problems suppressed by inline ignore directives
+    if !problems.is_empty() {
+        let ignore_map = ignore::parse_ignore_directives(&result);
+        if !ignore_map.is_empty() {
+            problems.retain(|p| !ignore_map.is_ignored(p.line, &p.kind));
+        }
     }
 
     let changed = result != content;
@@ -1110,5 +1135,58 @@ mod tests {
             .iter()
             .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
         assert!(problem.is_none());
+    }
+
+    // ── Inline ignore directives ──
+
+    #[test]
+    fn test_ignore_inline_suppresses_todo() {
+        let input = "// TODO: fix this fini:ignore\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(result.problems.is_empty());
+    }
+
+    #[test]
+    fn test_ignore_next_line_suppresses_todo() {
+        let input = "// fini:ignore-next-line\n// TODO: fix this\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(result.problems.is_empty());
+    }
+
+    #[test]
+    fn test_ignore_selective_debug() {
+        let input = "console.log('test'); // fini:ignore debug\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(result.problems.is_empty());
+    }
+
+    #[test]
+    fn test_ignore_selective_does_not_suppress_other() {
+        let input = "console.log('test'); // TODO: fix fini:ignore debug\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.problems.len(), 1);
+        assert!(matches!(result.problems[0].kind, ProblemKind::TodoComment));
+    }
+
+    #[test]
+    fn test_ignore_next_line_selective() {
+        let config = NormalizeConfig {
+            detect_debug: true,
+            detect_todos: true,
+            ..NormalizeConfig::default()
+        };
+        let input = "# fini:ignore-next-line debug\nprint('hello') # TODO: later\n";
+        let result = normalize_content(input, &config);
+        // debug is suppressed, but TODO is not
+        assert_eq!(result.problems.len(), 1);
+        assert!(matches!(result.problems[0].kind, ProblemKind::TodoComment));
+    }
+
+    #[test]
+    fn test_ignore_without_directive_still_detects() {
+        let input = "// TODO: fix this\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.problems.len(), 1);
+        assert!(matches!(result.problems[0].kind, ProblemKind::TodoComment));
     }
 }

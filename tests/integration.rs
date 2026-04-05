@@ -609,6 +609,79 @@ exclude = ["*.log"]
 }
 
 // ===========================================
+// Inline Ignore Directives
+// ===========================================
+
+#[test]
+fn test_ignore_inline_todo_check_mode() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.rs");
+    fs::write(&file, "// TODO: fix this fini:ignore\nfn main() {}\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Ignored TODO should not cause failure
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_ignore_next_line_check_mode() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.rs");
+    fs::write(
+        &file,
+        "// fini:ignore-next-line\n// TODO: fix this\nfn main() {}\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_ignore_selective_suppresses_only_specified() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.js");
+    // debug is ignored but TODO is not
+    fs::write(&file, "console.log('x'); // TODO: fix fini:ignore debug\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Should still fail because TODO is not ignored
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("TODO"));
+}
+
+#[test]
+fn test_ignore_in_fix_mode_suppresses_warning() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.rs");
+    fs::write(&file, "// TODO: intentional fini:ignore\n").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should not mention TODO in output
+    assert!(!stdout.contains("TODO"));
+}
+
+// ===========================================
 // Stdin Mode
 // ===========================================
 
