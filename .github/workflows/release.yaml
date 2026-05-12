@@ -75,7 +75,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -name 'fini-*.tar.gz' -exec mv {} dist/ \;
+          # -mindepth/-maxdepth 2 narrows the scope to where upload-artifact places
+          # one tarball per matrix entry (artifacts/<name>/<file>); rejects any rogue
+          # .tar.gz planted at other depths.
+          find artifacts -mindepth 2 -maxdepth 2 -name 'fini-*.tar.gz' -exec mv {} dist/ \;
           ls -la dist/
 
       - name: Generate checksums
