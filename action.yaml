@@ -19,6 +19,14 @@ inputs:
     description: 'Run in check mode (fail if issues found)'
     required: false
     default: 'true'
+  verify-attestation:
+    description: |
+      Verify SLSA build provenance via `gh attestation verify` (requires gh CLI and a GITHUB_TOKEN).
+      Set to 'true' once your pinned fini version has attestations (releases after v0.3.0).
+      Keeping this 'false' on legacy releases is intentional — a soft-fail would let a tampered
+      artifact pass simply by omitting its attestation.
+    required: false
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -26,44 +34,110 @@ runs:
     - name: Determine version
       id: version
       shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
-        if [ "${{ inputs.version }}" = "latest" ]; then
-          VERSION=$(curl -sL https://api.github.com/repos/tsukasaI/fini/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+        set -euo pipefail
+        if [ "$INPUT_VERSION" = "latest" ]; then
+          VERSION=$(curl -fsSL https://api.github.com/repos/tsukasaI/fini/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Failed to resolve latest fini version" >&2
+            exit 1
+          fi
         else
-          VERSION="${{ inputs.version }}"
+          # Reject anything that isn't a plausible version tag to keep this value
+          # safe to use in URLs and filenames downstream.
+          case "$INPUT_VERSION" in
+            v[0-9]*|[0-9]*) VERSION="$INPUT_VERSION" ;;
+            *)
+              echo "::error::Invalid version '$INPUT_VERSION' (expected vX.Y.Z or X.Y.Z)" >&2
+              exit 1 ;;
+          esac
         fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-    - name: Download fini
+    - name: Download and verify fini
       shell: bash
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        VERIFY_ATTESTATION: ${{ inputs.verify-attestation }}
+        GH_TOKEN: ${{ github.token }}
       run: |
-        VERSION=${{ steps.version.outputs.version }}
+        set -euo pipefail
         ARCH=$(uname -m)
         OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
-        if [ "$OS" = "darwin" ]; then
-          if [ "$ARCH" = "arm64" ]; then
-            TARGET="aarch64-apple-darwin"
-          else
-            TARGET="x86_64-apple-darwin"
+        case "$OS-$ARCH" in
+          darwin-arm64)  TARGET="aarch64-apple-darwin" ;;
+          darwin-x86_64) TARGET="x86_64-apple-darwin" ;;
+          linux-aarch64) TARGET="aarch64-unknown-linux-gnu" ;;
+          linux-x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
+          *)
+            echo "::error::Unsupported platform: $OS-$ARCH" >&2
+            exit 1 ;;
+        esac
+
+        TARBALL="fini-${TARGET}.tar.gz"
+        BASE="https://github.com/tsukasaI/fini/releases/download/${VERSION}"
+
+        # Download tarball and checksums (separate steps so we can verify before extracting).
+        curl -fsSL --retry 3 -o "$TARBALL"     "${BASE}/${TARBALL}"
+        curl -fsSL --retry 3 -o checksums.txt  "${BASE}/checksums.txt"
+
+        # Verify SHA-256. The release workflow records checksums as `<sha>  <dir>/<name>`,
+        # so strip any leading path component before matching against our local file.
+        EXPECTED=$(awk -v name="$TARBALL" '{
+          n = $NF; sub(".*/", "", n);
+          if (n == name) { print $1; exit }
+        }' checksums.txt)
+        if [ -z "$EXPECTED" ]; then
+          echo "::error::No checksum entry for $TARBALL in checksums.txt" >&2
+          exit 1
+        fi
+        ACTUAL=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
+        if [ "$EXPECTED" != "$ACTUAL" ]; then
+          echo "::error::Checksum mismatch for $TARBALL (expected $EXPECTED, got $ACTUAL)" >&2
+          exit 1
+        fi
+        echo "Checksum verified: $TARBALL ($ACTUAL)"
+
+        # Verify SLSA build provenance. Hard-fail when enabled so a missing attestation
+        # cannot be silently accepted (which would let an attacker bypass verification by
+        # simply omitting the provenance from a forged release).
+        if [ "$VERIFY_ATTESTATION" = "true" ]; then
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "::error::verify-attestation=true but the gh CLI is not installed on this runner" >&2
+            exit 1
           fi
-        else
-          if [ "$ARCH" = "aarch64" ]; then
-            TARGET="aarch64-unknown-linux-gnu"
-          else
-            TARGET="x86_64-unknown-linux-gnu"
+          if ! gh attestation verify "$TARBALL" --repo tsukasaI/fini; then
+            echo "::error::Build provenance verification failed for $TARBALL" >&2
+            exit 1
           fi
+          echo "Build provenance verified for $TARBALL"
         fi
 
-        curl -sL "https://github.com/tsukasaI/fini/releases/download/${VERSION}/fini-${TARGET}.tar.gz" | tar xz
+        tar xzf "$TARBALL"
         chmod +x fini
-        echo "$PWD" >> $GITHUB_PATH
+        rm -f "$TARBALL" checksums.txt
+        echo "$PWD" >> "$GITHUB_PATH"
 
     - name: Run fini
       shell: bash
+      env:
+        FINI_CHECK: ${{ inputs.check }}
+        FINI_FILES: ${{ inputs.files }}
       run: |
-        if [ "${{ inputs.check }}" = "true" ]; then
-          fini --check ${{ inputs.files }}
+        set -euo pipefail
+        # Split FINI_FILES on whitespace into an array so callers can still pass multiple
+        # paths (e.g. "src/ tests/") without exposing the value to shell metacharacter
+        # interpretation. `read -ra` performs pure word-splitting — no command/parameter
+        # or pathname expansion happens because each element is passed quoted below.
+        FILES_ARR=()
+        if [ -n "$FINI_FILES" ]; then
+          read -ra FILES_ARR <<<"$FINI_FILES"
+        fi
+        if [ "$FINI_CHECK" = "true" ]; then
+          fini --check "${FILES_ARR[@]}"
         else
-          fini ${{ inputs.files }}
+          fini "${FILES_ARR[@]}"
         fi

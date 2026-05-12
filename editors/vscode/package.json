@@ -27,6 +27,16 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "fini.path controls which binary is executed on save. In untrusted workspaces, workspace-level overrides of fini.path and fini.args are ignored — the user-level setting is used instead.",
+      "restrictedConfigurations": [
+        "fini.path",
+        "fini.args"
+      ]
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "fini",

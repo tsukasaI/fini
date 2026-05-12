@@ -173,9 +173,12 @@ Add to `.claude/settings.json`:
 ```yaml
 - uses: tsukasaI/fini@v1
   with:
-    files: 'src/ tests/'    # Files/directories to check (default: .)
-    check: 'true'           # Check mode, fail if issues found (default: true)
-    version: 'v0.3.0'       # Specific version (default: latest)
+    files: 'src/ tests/'         # Files/directories to check (default: .)
+    check: 'true'                # Check mode, fail if issues found (default: true)
+    version: 'v0.3.0'            # Specific version (default: latest)
+    verify-attestation: 'false'  # Verify SLSA build provenance via `gh attestation verify`
+                                 # (default: false). Set to 'true' once your pinned fini
+                                 # version has attestations (releases after v0.3.0).
 ```
 
 ## VS Code Extension
