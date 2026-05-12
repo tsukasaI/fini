@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Keep SHA-pinned actions current so pin-by-hash doesn't rot in place.
+  # All third-party actions are grouped into a single weekly PR to avoid noise.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
