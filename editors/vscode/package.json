@@ -27,6 +27,12 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "fini.path can be set per-workspace, which controls which binary is executed on save. Only enable fini in trusted workspaces."
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "fini",
