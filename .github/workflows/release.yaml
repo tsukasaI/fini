@@ -112,14 +112,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # No rust-cache here: --no-verify skips the build, so the cache buys nothing
+      # and a poisoned cache entry could substitute dependencies at publish time.
 
       - name: Verify Cargo.toml version matches tag
         run: |
           set -euo pipefail
+          # Strips the leading "v"; works for pre-release tags too
+          # (e.g. v0.4.0-rc1 -> 0.4.0-rc1, matched against Cargo.toml verbatim).
           TAG="${GITHUB_REF_NAME#v}"
           CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[0].version')
+            | jq -r '.packages[] | select(.name == "fini") | .version')
           if [ "$TAG" != "$CARGO_VERSION" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
             exit 1
@@ -152,12 +155,15 @@ jobs:
         run: cargo publish --locked --no-verify
 
       - name: Verify post-publish .crate hash unchanged
+        # If this fails, the crate is already on crates.io. The attestation
+        # may not cover the uploaded bytes — yank the version via
+        # `cargo yank --version <v>` and investigate before re-releasing.
         env:
           BEFORE: ${{ steps.hash.outputs.before }}
         run: |
           set -euo pipefail
           AFTER=$(sha256sum target/package/fini-*.crate | awk '{print $1}')
           if [ "$BEFORE" != "$AFTER" ]; then
-            echo "::error::.crate sha256 changed between attest and publish ($BEFORE -> $AFTER); attestation may not cover the published artifact" >&2
+            echo "::error::.crate sha256 changed between attest and publish ($BEFORE -> $AFTER); attestation may not cover the published artifact. Yank and investigate." >&2
             exit 1
           fi
