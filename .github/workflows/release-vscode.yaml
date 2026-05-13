@@ -1,0 +1,72 @@
+name: Release VS Code Extension
+
+on:
+  push:
+    tags:
+      - "vscode-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish-vsix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # checkout only
+      id-token: write       # mint OIDC token for build provenance
+      attestations: write   # write the provenance attestation
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Verify version and resolve vsix path
+        id: prepare
+        run: |
+          set -euo pipefail
+          # Tag prefix "vscode-v" lets the extension version independently
+          # of the CLI's "v*" tags. e.g. vscode-v0.3.0 -> 0.3.0
+          TAG="${GITHUB_REF_NAME#vscode-v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG" >&2
+            exit 1
+          fi
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+          echo "vsix-name=fini-${PKG}.vsix" >> "$GITHUB_OUTPUT"
+          # subject-path for attest-build-provenance is resolved from the
+          # workflow workspace root, not the defaults.run working-directory.
+          echo "vsix-path=editors/vscode/fini-${PKG}.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Package .vsix
+        env:
+          VSIX_NAME: ${{ steps.prepare.outputs.vsix-name }}
+        # Invoke vsce directly from node_modules/.bin (the locked, audited
+        # @vscode/vsce). Avoid `npx vsce`: npx resolves "vsce" to the
+        # deprecated standalone "vsce" package on the registry, not the
+        # locally installed @vscode/vsce.
+        run: ./node_modules/.bin/vsce package --out "$VSIX_NAME"
+
+      - name: Attest .vsix
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ steps.prepare.outputs.vsix-path }}
+
+      - name: Publish to Marketplace
+        env:
+          # PAT scope: Marketplace > Manage on the tsukasaI publisher only.
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSIX_NAME: ${{ steps.prepare.outputs.vsix-name }}
+        # vsce publish --packagePath uploads the existing .vsix as-is (no
+        # re-packaging), so the attested bytes are the published bytes.
+        run: ./node_modules/.bin/vsce publish --packagePath "$VSIX_NAME" --pat "$VSCE_PAT"
