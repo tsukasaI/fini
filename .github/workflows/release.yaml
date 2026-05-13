@@ -115,7 +115,8 @@ jobs:
       # No rust-cache here: --no-verify skips the build, so the cache buys nothing
       # and a poisoned cache entry could substitute dependencies at publish time.
 
-      - name: Verify Cargo.toml version matches tag
+      - name: Verify version and resolve crate path
+        id: prepare
         run: |
           set -euo pipefail
           # Strips the leading "v"; works for pre-release tags too
@@ -127,25 +128,30 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
             exit 1
           fi
+          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "crate-path=target/package/fini-${CARGO_VERSION}.crate" >> "$GITHUB_OUTPUT"
 
+      # --dry-run produces target/package/fini-<version>.crate as a side
+      # effect and validates the publish path (manifest, registry metadata,
+      # build from the packaged tarball). cargo package alone would skip
+      # the publish-mode validation.
       - name: cargo publish --dry-run
         run: cargo publish --locked --dry-run
 
-      - name: cargo package
-        run: cargo package --locked
-
       - name: Record pre-publish hash
         id: hash
+        env:
+          CRATE: ${{ steps.prepare.outputs.crate-path }}
         run: |
           set -euo pipefail
-          BEFORE=$(sha256sum target/package/fini-*.crate | awk '{print $1}')
+          BEFORE=$(sha256sum "$CRATE" | awk '{print $1}')
           echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
-          echo "Pre-publish .crate sha256: $BEFORE"
+          echo "Pre-publish $CRATE sha256: $BEFORE"
 
       - name: Attest .crate
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: 'target/package/fini-*.crate'
+          subject-path: ${{ steps.prepare.outputs.crate-path }}
 
       - name: Publish to crates.io
         env:
@@ -160,10 +166,11 @@ jobs:
         # `cargo yank --version <v>` and investigate before re-releasing.
         env:
           BEFORE: ${{ steps.hash.outputs.before }}
+          CRATE: ${{ steps.prepare.outputs.crate-path }}
         run: |
           set -euo pipefail
-          AFTER=$(sha256sum target/package/fini-*.crate | awk '{print $1}')
+          AFTER=$(sha256sum "$CRATE" | awk '{print $1}')
           if [ "$BEFORE" != "$AFTER" ]; then
-            echo "::error::.crate sha256 changed between attest and publish ($BEFORE -> $AFTER); attestation may not cover the published artifact. Yank and investigate." >&2
+            echo "::error::$CRATE sha256 changed between attest and publish ($BEFORE -> $AFTER); attestation may not cover the published artifact. Yank and investigate." >&2
             exit 1
           fi
