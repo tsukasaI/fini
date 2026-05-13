@@ -35,7 +35,10 @@ jobs:
         run: |
           set -euo pipefail
           # Tag prefix "vscode-v" lets the extension version independently
-          # of the CLI's "v*" tags. e.g. vscode-v0.3.0 -> 0.3.0
+          # of the CLI's "v*" tags. e.g. vscode-v0.3.0 -> 0.3.0.
+          # The mismatch check below is the only guard: accidental tags
+          # like "vscode-vfoo" or a bare "vscode-v" strip to a value that
+          # can never equal a semver in package.json, so the job aborts.
           TAG="${GITHUB_REF_NAME#vscode-v}"
           PKG=$(node -p "require('./package.json').version")
           if [ "$TAG" != "$PKG" ]; then
@@ -65,8 +68,11 @@ jobs:
       - name: Publish to Marketplace
         env:
           # PAT scope: Marketplace > Manage on the tsukasaI publisher only.
+          # vsce reads VSCE_PAT from env as the default for --pat; passing
+          # it on the command line would expose it via /proc/<pid>/cmdline
+          # to any co-process on the runner.
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
           VSIX_NAME: ${{ steps.prepare.outputs.vsix-name }}
         # vsce publish --packagePath uploads the existing .vsix as-is (no
         # re-packaging), so the attested bytes are the published bytes.
-        run: ./node_modules/.bin/vsce publish --packagePath "$VSIX_NAME" --pat "$VSCE_PAT"
+        run: ./node_modules/.bin/vsce publish --packagePath "$VSIX_NAME"
