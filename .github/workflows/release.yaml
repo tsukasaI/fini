@@ -99,3 +99,65 @@ jobs:
             dist/fini-*.tar.gz
             dist/checksums.txt
           generate_release_notes: true
+
+  publish-crate:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # checkout only
+      id-token: write       # mint OIDC token for build provenance
+      attestations: write   # write the provenance attestation
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Verify Cargo.toml version matches tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].version')
+          if [ "$TAG" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
+            exit 1
+          fi
+
+      - name: cargo publish --dry-run
+        run: cargo publish --locked --dry-run
+
+      - name: cargo package
+        run: cargo package --locked
+
+      - name: Record pre-publish hash
+        id: hash
+        run: |
+          set -euo pipefail
+          BEFORE=$(sha256sum target/package/fini-*.crate | awk '{print $1}')
+          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
+          echo "Pre-publish .crate sha256: $BEFORE"
+
+      - name: Attest .crate
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: 'target/package/fini-*.crate'
+
+      - name: Publish to crates.io
+        env:
+          # Token must be scoped to `publish-update` only (fini is already
+          # published, so `publish-new` is unnecessary).
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish --locked --no-verify
+
+      - name: Verify post-publish .crate hash unchanged
+        env:
+          BEFORE: ${{ steps.hash.outputs.before }}
+        run: |
+          set -euo pipefail
+          AFTER=$(sha256sum target/package/fini-*.crate | awk '{print $1}')
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "::error::.crate sha256 changed between attest and publish ($BEFORE -> $AFTER); attestation may not cover the published artifact" >&2
+            exit 1
+          fi
