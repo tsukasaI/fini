@@ -1,0 +1,64 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+fini is a Rust CLI tool for file normalization, designed as a finishing step for AI coding agents. It standardizes formatting (line endings, trailing whitespace, EOF newlines, zero-width characters, etc.) and detects human errors (TODOs, FIXMEs, debug code, secrets).
+
+## Commands
+
+```bash
+cargo build                    # Build
+cargo test                     # Run all tests (unit + integration)
+cargo test <test_name>         # Run a single test by name
+cargo test --lib               # Unit tests only
+cargo test --test integration  # Integration tests only
+cargo clippy                   # Lint
+cargo fmt                      # Format
+cargo fmt -- --check           # Format check (used in CI)
+```
+
+## Architecture
+
+**Data flow**: CLI parsing (clap) → config loading (TOML + editorconfig) → config merging (CLI > TOML > defaults) → file walking (ignore crate, respects .gitignore) → parallel normalize (rayon) → sequential output/write → exit code.
+
+Key design decisions:
+- File reads and normalization run in **parallel** (rayon), but output and file writes are **sequential** for thread-safety and deterministic ordering.
+- Config priority: CLI flags override TOML config, which overrides hardcoded defaults. See `config/merge.rs`.
+- Binary detection uses null-byte check in first 8192 bytes (`lib.rs:is_binary`).
+
+### Module map
+
+- **`main.rs`** — CLI args via clap derive, handles `--init`/`--stdin` special modes, orchestrates config loading
+- **`lib.rs`** — `run()` entry point: walks files, parallel processing, collects results, writes files
+- **`normalize/mod.rs`** — `normalize_content()` pipeline: applies fixes then detections. Contains `NormalizeConfig`, `NormalizeResult`, `Problem` types and the bulk of unit tests
+- **`normalize/fix.rs`** — Pure transformation functions (line endings, zero-width, trailing ws, EOF newline, blank lines, fullwidth spaces, code block remnants)
+- **`normalize/detect.rs`** — Detection-only functions (TODO/FIXME markers, debug code patterns, secret regex patterns, line length). No auto-fix, only reporting
+- **`config/`** — `file.rs` (upward search for fini.toml, stops at git root), `merge.rs` (three-way merge logic), `toml_schema.rs` (serde structs), `init.rs` (template generation), `editorconfig.rs` (conflict warnings)
+- **`walker.rs`** — File traversal via `ignore` crate with custom exclude patterns (inverted gitignore-style globs)
+- **`output.rs`** — Output modes (Normal/Quiet/Diff), summary stats, color-aware formatting
+- **`colors.rs`** — ANSI color codes with NO_COLOR/TTY detection
+- **`progress.rs`** — Progress bar (indicatif), only shown for 10+ files
+
+### Normalization pipeline order
+
+Fixes are applied in this sequence within `normalize_content()`:
+1. Line ending normalization (CRLF/CR → LF)
+2. Zero-width character removal (preserves BOM at position 0)
+3. Leading blank line removal
+4. Consecutive blank line limiting
+5. Code block remnant removal
+6. Fullwidth space conversion (U+3000 → space)
+7. Trailing whitespace removal
+8. EOF newline normalization
+
+Then detections run: TODOs, FIXMEs, debug code, secrets, line length.
+
+Finally, if any problems exist, `fini:ignore` / `fini:ignore-next-line` directives are parsed from the normalized content and matching problems are filtered out (post-filter in `normalize/ignore.rs`).
+
+### Testing conventions
+
+- Unit tests live inline in each module (especially extensive in `normalize/mod.rs`)
+- Integration tests in `tests/integration.rs` test the CLI binary end-to-end using `tempfile` for isolated directories
+- Tests are organized by feature phase (Phase 1: core, Phase 2: config, Phase 3: detection)
