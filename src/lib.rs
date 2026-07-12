@@ -48,11 +48,19 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         files_fixed: 0,
         files_with_problems: 0,
         warnings: 0,
+        errors: 0,
     };
 
-    let file_paths: Vec<_> = walk_paths(paths, &config.exclude_patterns)
-        .filter_map(|r| r.ok())
-        .collect();
+    let mut file_paths = vec![];
+    for entry in walk_paths(paths, &config.exclude_patterns)? {
+        match entry {
+            Ok(path) => file_paths.push(path),
+            Err(e) => {
+                eprintln!("Error walking path: {e}");
+                result.errors += 1;
+            }
+        }
+    }
     let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
     // Process files in parallel (read + normalize), collect results
@@ -95,9 +103,8 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
                 } else {
                     if normalize_result.has_changes() {
                         if let Err(e) = fs::write(path, &normalize_result.content) {
-                            if ctx.mode != OutputMode::Quiet {
-                                eprintln!("Error writing {}: {e}", path.display());
-                            }
+                            eprintln!("Error writing {}: {e}", path.display());
+                            result.errors += 1;
                             continue;
                         }
                         result.files_fixed += 1;
@@ -106,9 +113,8 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
                 }
             }
             FileOutcome::Error(e) => {
-                if ctx.mode != OutputMode::Quiet {
-                    eprintln!("Error processing {}: {e}", path.display());
-                }
+                eprintln!("Error processing {}: {e}", path.display());
+                result.errors += 1;
             }
         }
     }

@@ -367,6 +367,48 @@ max_blank_lines = 1
     assert_eq!(fs::read_to_string(&file).unwrap(), "line1\n\nline2\n");
 }
 
+#[test]
+fn test_fix_then_check_idempotent_with_blank_limit_and_code_blocks() {
+    // Regression test for issue #33: max_blank_lines + fix_code_blocks must
+    // converge in a single `fini` fix pass, so an immediate `fini --check`
+    // succeeds without needing to run fix twice.
+    let dir = TempDir::new().unwrap();
+
+    let config_path = dir.path().join("fini.toml");
+    fs::write(
+        &config_path,
+        r#"
+[normalize]
+max_blank_lines = 1
+fix_code_blocks = true
+"#,
+    )
+    .unwrap();
+
+    let file = dir.path().join("sample.md");
+    fs::write(&file, "a\n\n```py\n\nb\n").unwrap();
+
+    let fix_output = fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(fix_output.status.success());
+
+    let check_output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        check_output.status.success(),
+        "check failed after fix: {}",
+        String::from_utf8_lossy(&check_output.stdout)
+    );
+}
+
 // ===========================================
 // Phase 3: Human Error Prevention Tests
 // ===========================================
@@ -535,6 +577,105 @@ detect_secrets = false
 
     // Should exit with 0 (TODO not flagged per config)
     assert!(output.status.success());
+}
+
+// ===========================================
+// Exit Codes (issue #34) & Invalid Exclude (issue #32)
+// ===========================================
+
+#[test]
+fn test_invalid_exclude_pattern_fails_closed() {
+    // Regression test for issue #32: an invalid --exclude glob must not be
+    // silently swallowed. It should abort with a non-zero exit and an stderr
+    // message, and must not process (and silently "pass") any files.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("f.md");
+    fs::write(&file, "hello   \n").unwrap(); // trailing whitespace, should be fixed
+
+    let output = fini_cmd()
+        .arg("--exclude")
+        .arg("[invalid")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid exclude pattern"),
+        "stderr: {stderr}"
+    );
+
+    // File must be left untouched — no silent pass-through.
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello   \n");
+}
+
+#[test]
+fn test_exit_code_0_on_success() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn test_exit_code_1_on_check_mode_problems() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap(); // missing EOF newline
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn test_exit_code_2_on_invalid_exclude_pattern() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--exclude")
+        .arg("[invalid")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_exit_code_2_on_write_permission_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("readonly.txt");
+    fs::write(&file, "hello   \n").unwrap(); // trailing whitespace triggers a write
+
+    let mut perms = fs::metadata(&file).unwrap().permissions();
+    perms.set_mode(0o444);
+    fs::set_permissions(&file, perms.clone()).unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+
+    // Restore permissions so TempDir cleanup can remove the file.
+    perms.set_mode(0o644);
+    fs::set_permissions(&file, perms).unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error writing"), "stderr: {stderr}");
 }
 
 // ===========================================

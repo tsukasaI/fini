@@ -39,11 +39,16 @@ pub struct RunResult {
     pub files_fixed: usize,
     pub files_with_problems: usize,
     pub warnings: usize,
+    pub errors: usize,
 }
 
 impl RunResult {
     pub fn has_problems(&self) -> bool {
         self.files_with_problems > 0
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
     }
 }
 
@@ -209,16 +214,28 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
     }
 
     if config.check_only {
-        if result.files_with_problems > 0 {
+        if result.files_with_problems > 0 || result.errors > 0 {
             println!();
-            println!(
-                "{}{} files with problems{}",
-                ctx.colors.error,
-                result.files_with_problems,
-                ctx.colors.reset()
-            );
+            let mut parts = vec![];
+            if result.files_with_problems > 0 {
+                parts.push(format!(
+                    "{}{} files with problems{}",
+                    ctx.colors.error,
+                    result.files_with_problems,
+                    ctx.colors.reset()
+                ));
+            }
+            if result.errors > 0 {
+                parts.push(format!(
+                    "{}{} errors{}",
+                    ctx.colors.error,
+                    result.errors,
+                    ctx.colors.reset()
+                ));
+            }
+            println!("{}", parts.join(", "));
         }
-    } else if result.files_fixed > 0 || result.warnings > 0 {
+    } else if result.files_fixed > 0 || result.warnings > 0 || result.errors > 0 {
         println!();
         let mut parts = vec![];
         if result.files_fixed > 0 {
@@ -234,6 +251,14 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
                 "{}{} warnings{}",
                 ctx.colors.warning,
                 result.warnings,
+                ctx.colors.reset()
+            ));
+        }
+        if result.errors > 0 {
+            parts.push(format!(
+                "{}{} errors{}",
+                ctx.colors.error,
+                result.errors,
                 ctx.colors.reset()
             ));
         }

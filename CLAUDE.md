@@ -46,12 +46,14 @@ Key design decisions:
 Fixes are applied in this sequence within `normalize_content()`:
 1. Line ending normalization (CRLF/CR → LF)
 2. Zero-width character removal (preserves BOM at position 0)
-3. Leading blank line removal
-4. Consecutive blank line limiting
-5. Code block remnant removal
+3. Code block remnant removal
+4. Leading blank line removal
+5. Consecutive blank line limiting
 6. Fullwidth space conversion (U+3000 → space)
 7. Trailing whitespace removal
 8. EOF newline normalization
+
+Code block remnant removal runs before the blank-line fixes so blank lines exposed by removing a fence (e.g. a fence at the top of the file, or blank lines split apart by a fence) are cleaned up in the same pass — otherwise `fini` fix output could fail an immediate `fini --check` (non-idempotent output).
 
 Then detections run: TODOs, FIXMEs, debug code, secrets, line length.
 

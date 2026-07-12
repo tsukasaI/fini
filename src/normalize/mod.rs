@@ -136,6 +136,12 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         problems.extend(zw_problems);
     }
 
+    if config.fix_code_blocks {
+        let (fixed, code_block_problems) = remove_code_block_remnants(&result);
+        result = fixed;
+        problems.extend(code_block_problems);
+    }
+
     if config.remove_leading_blanks {
         let (fixed, leading_problems) = remove_leading_blank_lines(&result);
         result = fixed;
@@ -146,12 +152,6 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         let (fixed, blank_problems) = limit_consecutive_blank_lines(&result, max);
         result = fixed;
         problems.extend(blank_problems);
-    }
-
-    if config.fix_code_blocks {
-        let (fixed, code_block_problems) = remove_code_block_remnants(&result);
-        result = fixed;
-        problems.extend(code_block_problems);
     }
 
     let (fixed, fullwidth_problems) = fix_fullwidth_spaces(&result);
@@ -854,6 +854,73 @@ mod tests {
         let input = "\n\n```rust\nfn main() {\n    let x\u{200B} = 1;\n\n\n\n}\n```\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "fn main() {\n    let x = 1;\n\n}\n");
+    }
+
+    #[test]
+    fn test_fix_output_is_idempotent_with_blank_limit_and_code_blocks() {
+        // Regression test for issue #33: max_blank_lines + fix_code_blocks must be
+        // idempotent — running normalize_content twice should reach a fixed point
+        // on the first pass, so `fini` followed by `fini --check` never fails.
+        let config = NormalizeConfig {
+            max_blank_lines: Some(1),
+            fix_code_blocks: true,
+            ..NormalizeConfig::default()
+        };
+        let input = "a\n\n```py\n\nb\n";
+        let first = normalize_content(input, &config);
+        assert_eq!(first.content, "a\n\nb\n");
+
+        let second = normalize_content(&first.content, &config);
+        assert!(!second.has_changes());
+        assert!(second.problems.is_empty());
+    }
+
+    #[test]
+    fn test_idempotency_matrix_across_fix_flag_combinations() {
+        // Broader regression coverage for issue #33's bug class: any combination
+        // of blank-line/code-block fix flags applied to adversarial inputs (a
+        // fence at the very start/end of the file, fences surrounded by blank
+        // lines, CRLF mixed with trailing whitespace around a fence) must reach
+        // a fixed point after a single normalize_content pass.
+        let inputs = [
+            "```rust\nfn main() {}\n```\n",
+            "\n\n```py\ncode\n```\n\nafter\n",
+            "before\n```py\n\ncode\n\n```\nafter\n",
+            "```\ncode\n```\n\n\n\nmore\n",
+            "line1\r\n\r\n```js\r\ncode   \r\n```\r\n\r\nline2\r\n",
+            "\n\n\n```\ncode\n```\n",
+        ];
+
+        for &max_blank_lines in &[None, Some(0), Some(1), Some(2)] {
+            for &fix_code_blocks in &[false, true] {
+                for &remove_leading_blanks in &[false, true] {
+                    let config = NormalizeConfig {
+                        max_blank_lines,
+                        fix_code_blocks,
+                        remove_leading_blanks,
+                        ..NormalizeConfig::default()
+                    };
+
+                    for input in &inputs {
+                        let first = normalize_content(input, &config);
+                        let second = normalize_content(&first.content, &config);
+                        assert!(
+                            !second.has_changes(),
+                            "not idempotent for input {input:?} with config {config:?}: \
+                             {:?} -> {:?}",
+                            first.content,
+                            second.content
+                        );
+                        assert!(
+                            second.problems.iter().all(|p| p.kind.is_detection_only()),
+                            "leftover fixable problems for input {input:?} with config \
+                             {config:?}: {:?}",
+                            second.problems
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

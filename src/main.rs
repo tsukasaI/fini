@@ -165,7 +165,9 @@ fn main() -> ExitCode {
 
     match run(&cli.paths, &config, &ctx) {
         Ok(result) => {
-            if config.check_only && result.has_problems() {
+            if result.has_errors() {
+                ExitCode::from(2)
+            } else if config.check_only && result.has_problems() {
                 ExitCode::from(1)
             } else {
                 ExitCode::SUCCESS
@@ -173,7 +175,7 @@ fn main() -> ExitCode {
         }
         Err(e) => {
             eprintln!("Error: {e}");
-            ExitCode::from(1)
+            ExitCode::from(2)
         }
     }
 }
@@ -196,7 +198,7 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("Error reading stdin: {e}");
-        return ExitCode::from(1);
+        return ExitCode::from(2);
     }
 
     // Build normalize config
@@ -221,7 +223,7 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     print!("{}", result.content);
     if let Err(e) = io::stdout().flush() {
         eprintln!("Error writing stdout: {e}");
-        return ExitCode::from(1);
+        return ExitCode::from(2);
     }
 
     ExitCode::SUCCESS

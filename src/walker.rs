@@ -6,10 +6,15 @@ use std::path::PathBuf;
 /// Walk paths and yield file paths, respecting gitignore and custom exclude patterns.
 ///
 /// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js").
+///
+/// Returns `Err` immediately for fatal configuration errors (e.g. an invalid exclude
+/// pattern) so callers can fail closed instead of silently walking with no excludes.
+/// Once walking starts, per-entry errors (e.g. permission-denied on a subdirectory)
+/// are yielded as `Err` items in the iterator rather than aborting the whole walk.
 pub fn walk_paths(
     paths: &[String],
     exclude_patterns: &[String],
-) -> impl Iterator<Item = io::Result<PathBuf>> {
+) -> io::Result<impl Iterator<Item = io::Result<PathBuf>>> {
     let mut all_files = vec![];
 
     for path in paths {
@@ -25,16 +30,14 @@ pub fn walk_paths(
             for pattern in exclude_patterns {
                 // OverrideBuilder uses inverted ! semantics:
                 // !pattern = exclude, pattern = whitelist
-                if let Err(e) = overrides.add(&format!("!{pattern}")) {
-                    all_files.push(Err(io::Error::other(format!(
-                        "invalid exclude pattern '{pattern}': {e}"
-                    ))));
-                    return all_files.into_iter();
-                }
+                overrides.add(&format!("!{pattern}")).map_err(|e| {
+                    io::Error::other(format!("invalid exclude pattern '{pattern}': {e}"))
+                })?;
             }
-            if let Ok(built) = overrides.build() {
-                builder.overrides(built);
-            }
+            let built = overrides
+                .build()
+                .map_err(|e| io::Error::other(format!("failed to build exclude patterns: {e}")))?;
+            builder.overrides(built);
         }
 
         for entry in builder.build() {
@@ -51,7 +54,7 @@ pub fn walk_paths(
         }
     }
 
-    all_files.into_iter()
+    Ok(all_files.into_iter())
 }
 
 #[cfg(test)]
@@ -67,7 +70,7 @@ mod tests {
         fs::write(&file_path, "hello").unwrap();
 
         let paths = vec![file_path.to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[]).collect();
+        let files: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].is_ok());
@@ -81,7 +84,10 @@ mod tests {
         fs::write(dir.path().join("subdir/file2.txt"), "content2").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
 
         assert_eq!(files.len(), 2);
     }
@@ -93,7 +99,10 @@ mod tests {
         fs::write(dir.path().join(".hidden"), "hidden").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].to_string_lossy().contains("visible.txt"));
@@ -107,7 +116,10 @@ mod tests {
         fs::write(dir.path().join(".git/config"), "git config").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
 
         assert_eq!(files.len(), 1);
         assert!(!files[0].to_string_lossy().contains(".git"));
@@ -123,7 +135,10 @@ mod tests {
         fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[]).filter_map(|r| r.ok()).collect();
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
 
         assert!(files
             .iter()
@@ -144,6 +159,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["*.min.js".to_string(), "vendor/".to_string()];
         let files: Vec<_> = walk_paths(&paths, &exclude)
+            .unwrap()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -161,10 +177,62 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["node_modules/".to_string()];
         let files: Vec<_> = walk_paths(&paths, &exclude)
+            .unwrap()
             .filter_map(|r| r.ok())
             .collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].to_string_lossy().contains("app.js"));
+    }
+
+    #[test]
+    fn test_invalid_exclude_pattern_returns_err() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let exclude = vec!["[invalid".to_string()];
+        let result = walk_paths(&paths, &exclude);
+
+        let err = result.err().expect("invalid glob pattern should error");
+        assert!(err.to_string().contains("invalid exclude pattern"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_per_entry_walk_error_does_not_abort_walk() {
+        // Regression test for issue #32: a permission error on one subdirectory
+        // must surface as an `Err` item, not silently swallow the rest of the
+        // walk. Sibling files should still be yielded.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("good.txt"), "content").unwrap();
+        let blocked_dir = dir.path().join("blocked");
+        fs::create_dir(&blocked_dir).unwrap();
+        fs::write(blocked_dir.join("inner.txt"), "content").unwrap();
+
+        let mut perms = fs::metadata(&blocked_dir).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&blocked_dir, perms.clone()).unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let entries: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+
+        // Restore permissions so TempDir cleanup can remove the directory.
+        perms.set_mode(0o755);
+        fs::set_permissions(&blocked_dir, perms).unwrap();
+
+        assert!(
+            entries
+                .iter()
+                .filter_map(|r| r.as_ref().ok())
+                .any(|p| p.to_string_lossy().contains("good.txt")),
+            "sibling files must still be walked after a per-entry error: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|r| r.is_err()),
+            "permission-denied subdirectory should surface as an Err entry"
+        );
     }
 }
