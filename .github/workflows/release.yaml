@@ -131,12 +131,20 @@ jobs:
           echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
           echo "crate-path=target/package/fini-${CARGO_VERSION}.crate" >> "$GITHUB_OUTPUT"
 
-      # --dry-run produces target/package/fini-<version>.crate as a side
-      # effect and validates the publish path (manifest, registry metadata,
-      # build from the packaged tarball). cargo package alone would skip
-      # the publish-mode validation.
+      # Validates the publish path (manifest, registry metadata, build from
+      # the packaged tarball). Note: as of the current toolchain, a dry-run
+      # abort leaves the packaged .crate in target/package/tmp-crate/ instead
+      # of finalizing it at target/package/fini-<version>.crate (regression
+      # found releasing v0.4.0, 2026-07-12) — so the explicit `cargo package`
+      # step below is required to guarantee the file the hash/attest steps
+      # expect actually exists at that path.
       - name: cargo publish --dry-run
         run: cargo publish --locked --dry-run
+
+      # Explicit packaging step: guarantees target/package/fini-<version>.crate
+      # exists at a stable path regardless of cargo's dry-run-abort behavior.
+      - name: cargo package
+        run: cargo package --locked
 
       - name: Record pre-publish hash
         id: hash
