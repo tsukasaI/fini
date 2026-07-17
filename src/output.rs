@@ -1,6 +1,8 @@
 use crate::colors::Colors;
-use crate::normalize::{NormalizeConfig, NormalizeResult, ProblemKind};
+use crate::normalize::{mask_secret_lines, NormalizeConfig, NormalizeResult, ProblemKind};
 use similar::{ChangeTag, TextDiff};
+use std::borrow::Cow;
+use std::io::{self, Write};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,15 +24,24 @@ pub struct OutputContext {
     pub colors: Colors,
     pub verbose: bool,
     pub show_progress: bool,
+    /// Mask secret-matching lines in diff output (mirrors detect_secrets)
+    pub mask_secrets: bool,
 }
 
 impl OutputContext {
-    pub fn new(mode: OutputMode, use_colors: bool, verbose: bool, show_progress: bool) -> Self {
+    pub fn new(
+        mode: OutputMode,
+        use_colors: bool,
+        verbose: bool,
+        show_progress: bool,
+        mask_secrets: bool,
+    ) -> Self {
         Self {
             mode,
             colors: Colors::new(use_colors),
             verbose,
             show_progress,
+            mask_secrets,
         }
     }
 }
@@ -40,6 +51,12 @@ pub struct RunResult {
     pub files_with_problems: usize,
     pub warnings: usize,
     pub errors: usize,
+    /// Files not inspected (binary, non-UTF-8, UTF-16, symlink) — surfaced in
+    /// the summary so skipped coverage is visible without --verbose (issue #40)
+    pub skipped: usize,
+    /// Problems suppressed via fini:ignore directives (issue #46)
+    pub suppressed: usize,
+    pub suppressed_secrets: usize,
 }
 
 impl RunResult {
@@ -133,7 +150,10 @@ pub fn print_fix_result(
 ) {
     match ctx.mode {
         OutputMode::Quiet => println!("{}", path.display()),
-        OutputMode::Diff => print_diff(&path.display().to_string(), original, &result.content),
+        OutputMode::Diff => {
+            let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
+            print_diff(&path.display().to_string(), &orig, &new);
+        }
         OutputMode::Normal => {
             // Print warnings for full-width spaces
             for problem in result
@@ -184,15 +204,43 @@ pub fn print_skipped(path: &Path, reason: &str, ctx: &OutputContext) {
     );
 }
 
+/// Mask secret-matching lines on both sides of a diff before printing, so the
+/// diff path honors the same hint-only contract as check output (issue #44).
+fn masked_pair<'a>(
+    original: &'a str,
+    content: &'a str,
+    mask: bool,
+) -> (Cow<'a, str>, Cow<'a, str>) {
+    if mask {
+        (
+            Cow::Owned(mask_secret_lines(original)),
+            Cow::Owned(mask_secret_lines(content)),
+        )
+    } else {
+        (Cow::Borrowed(original), Cow::Borrowed(content))
+    }
+}
+
 pub fn print_diff(label: &str, original: &str, content: &str) {
+    let mut stdout = io::stdout().lock();
+    // Panicking on a failed stdout write matches println!'s historical behavior
+    print_diff_to(&mut stdout, label, original, content).expect("failed to write diff to stdout");
+}
+
+pub fn print_diff_to<W: Write>(
+    w: &mut W,
+    label: &str,
+    original: &str,
+    content: &str,
+) -> io::Result<()> {
     let diff = TextDiff::from_lines(original, content);
 
-    println!("--- {label}");
-    println!("+++ {label}");
+    writeln!(w, "--- {label}")?;
+    writeln!(w, "+++ {label}")?;
 
     for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
         if idx > 0 {
-            println!();
+            writeln!(w)?;
         }
 
         for op in group {
@@ -202,10 +250,11 @@ pub fn print_diff(label: &str, original: &str, content: &str) {
                     ChangeTag::Insert => '+',
                     ChangeTag::Equal => ' ',
                 };
-                print!("{sign}{change}");
+                write!(w, "{sign}{change}")?;
             }
         }
     }
+    Ok(())
 }
 
 pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
@@ -213,31 +262,18 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
         return;
     }
 
+    let mut parts = vec![];
+
     if config.check_only {
-        if result.files_with_problems > 0 || result.errors > 0 {
-            println!();
-            let mut parts = vec![];
-            if result.files_with_problems > 0 {
-                parts.push(format!(
-                    "{}{} files with problems{}",
-                    ctx.colors.error,
-                    result.files_with_problems,
-                    ctx.colors.reset()
-                ));
-            }
-            if result.errors > 0 {
-                parts.push(format!(
-                    "{}{} errors{}",
-                    ctx.colors.error,
-                    result.errors,
-                    ctx.colors.reset()
-                ));
-            }
-            println!("{}", parts.join(", "));
+        if result.files_with_problems > 0 {
+            parts.push(format!(
+                "{}{} files with problems{}",
+                ctx.colors.error,
+                result.files_with_problems,
+                ctx.colors.reset()
+            ));
         }
-    } else if result.files_fixed > 0 || result.warnings > 0 || result.errors > 0 {
-        println!();
-        let mut parts = vec![];
+    } else {
         if result.files_fixed > 0 {
             parts.push(format!(
                 "{}{} files fixed{}",
@@ -254,14 +290,41 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
                 ctx.colors.reset()
             ));
         }
-        if result.errors > 0 {
-            parts.push(format!(
-                "{}{} errors{}",
-                ctx.colors.error,
-                result.errors,
-                ctx.colors.reset()
-            ));
-        }
+    }
+
+    if result.errors > 0 {
+        parts.push(format!(
+            "{}{} errors{}",
+            ctx.colors.error,
+            result.errors,
+            ctx.colors.reset()
+        ));
+    }
+    if result.skipped > 0 {
+        parts.push(format!(
+            "{}{} files skipped (see --verbose){}",
+            ctx.colors.info,
+            result.skipped,
+            ctx.colors.reset()
+        ));
+    }
+    if result.suppressed > 0 {
+        let secrets = if result.suppressed_secrets > 0 {
+            format!(" ({} secrets)", result.suppressed_secrets)
+        } else {
+            String::new()
+        };
+        parts.push(format!(
+            "{}{} problems suppressed by fini:ignore{}{}",
+            ctx.colors.warning,
+            result.suppressed,
+            secrets,
+            ctx.colors.reset()
+        ));
+    }
+
+    if !parts.is_empty() {
+        println!();
         println!("{}", parts.join(", "));
     }
 }

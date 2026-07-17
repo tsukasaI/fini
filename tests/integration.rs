@@ -823,6 +823,245 @@ fn test_ignore_in_fix_mode_suppresses_warning() {
 }
 
 // ===========================================
+// Diff Output & Secret Masking (issues #38, #44)
+// ===========================================
+
+#[test]
+fn test_diff_masks_secret_lines() {
+    // Regression test for issue #44: --diff must not print raw secret values,
+    // including unchanged context lines near a change.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.env");
+    fs::write(&file, "password = \"supersecret123\"\ncode here   \n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("supersecret123"),
+        "raw secret leaked into diff output: {stdout}"
+    );
+    assert!(
+        stdout.contains("[line masked: potential hardcoded secret]"),
+        "masked placeholder missing: {stdout}"
+    );
+}
+
+#[test]
+fn test_stdin_check_diff_goes_to_stderr() {
+    // Regression test for issue #38: --stdin --check --diff must keep stdout
+    // clean (its contract is "normalized content only") and put the diff on
+    // stderr.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .arg("--diff")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"hello   \n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        stderr.contains("--- stdin"),
+        "diff missing on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("+++ stdin"),
+        "diff missing on stderr: {stderr}"
+    );
+}
+
+// ===========================================
+// Secret Detection Trust Boundary & Audit Trail (issues #45, #46)
+// ===========================================
+
+#[test]
+fn test_config_disabling_secret_detection_warns_even_in_quiet_mode() {
+    // Regression test for issue #45: a repo-local fini.toml downgrading the
+    // security posture must never be silent, and --quiet must not hide it.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\ndetect_secrets = false\n",
+    )
+    .unwrap();
+    let file = dir.path().join("clean.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--quiet")
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("disables secret detection"),
+        "missing security-posture warning: {stderr}"
+    );
+}
+
+#[test]
+fn test_suppressed_secret_leaves_audit_trail() {
+    // Regression test for issue #46: `fini:ignore secret` still suppresses the
+    // failure, but the suppression must be visible (stderr + summary).
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.py");
+    fs::write(
+        &file,
+        "password = \"supersecret123\" # fini:ignore secret\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "suppression must still work");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("suppressed by fini:ignore"),
+        "missing stderr audit trail: {stderr}"
+    );
+    assert!(
+        stderr.contains(":1"),
+        "audit trail must include the line number"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("suppressed"),
+        "summary must count suppressions: {stdout}"
+    );
+}
+
+// ===========================================
+// Skip Visibility & UTF-16 (issue #40)
+// ===========================================
+
+#[test]
+fn test_utf16_file_skipped_with_accurate_reason() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("utf16.txt");
+    // "TODO: fix\n" encoded as UTF-16LE with BOM
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "TODO: fix\n".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    fs::write(&file, &bytes).unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--verbose")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // Not inspected, so no problems — but the skip must be visible and accurate
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("UTF-16"),
+        "skip reason must say UTF-16: {stdout}"
+    );
+    assert_eq!(fs::read(&file).unwrap(), bytes, "file must be untouched");
+}
+
+#[test]
+fn test_skipped_files_counted_in_summary_without_verbose() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("binary.bin");
+    fs::write(&file, b"hello\x00world").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 files skipped"),
+        "summary must surface skipped files: {stdout}"
+    );
+}
+
+// ===========================================
+// Atomic Writes & Symlinks (issue #35)
+// ===========================================
+
+#[cfg(unix)]
+#[test]
+fn test_fix_preserves_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("script.sh");
+    fs::write(&file, "echo hi   \n").unwrap(); // trailing whitespace triggers a write
+
+    let mut perms = fs::metadata(&file).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&file, perms).unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    assert_eq!(fs::read_to_string(&file).unwrap(), "echo hi\n");
+    let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o755, "atomic write must preserve permissions");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_symlink_target_never_rewritten() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("target.txt");
+    let link = dir.path().join("link.txt");
+    fs::write(&target, "hello   \n").unwrap(); // would be "fixed" if followed
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let output = fini_cmd().arg(link.to_str().unwrap()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "hello   \n",
+        "symlink target must not be rewritten"
+    );
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the symlink itself must survive"
+    );
+}
+
+// ===========================================
 // Stdin Mode
 // ===========================================
 

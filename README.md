@@ -23,7 +23,8 @@ nix profile install github:tsukasaI/fini
 
 ### Homebrew
 ```bash
-brew install tsukasaI/tap/fini
+brew tap tsukasaI/fini https://github.com/tsukasaI/fini
+brew install tsukasaI/fini/fini
 ```
 
 ### Pre-built binaries
@@ -136,13 +137,32 @@ API_KEY = "sk_test_example"
 
 Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `fullwidth`, `zero-width`, `leading-blanks`, `blank-lines`, `code-block`
 
+Suppressions are counted in the run summary. Suppressed `secret` detections are
+always reported on stderr with `file:line` (even with `--quiet`) so they remain
+auditable.
+
+## Secret detection and output
+
+Secret detections are reported hint-only — the matched value is never printed.
+`--diff` output masks lines matching a secret pattern
+(`[line masked: potential …]`), but a secret that no pattern matches will appear
+verbatim in a diff: be careful publishing CI logs that include `--diff` output.
+
+Disabling secret detection via `fini.toml` (`detect_secrets = false`) prints a
+warning to stderr that `--quiet` does not suppress.
+
 ## Skipped
 
 - Binary files (null bytes in first 8KB)
+- UTF-16 and other non-UTF-8 text files (unsupported encodings)
+- Symlinks (never followed or rewritten)
 - Empty files
 - Hidden files (`.foo`)
 - `.git/` directory
 - `.gitignore` patterns
+
+Skipped binary / non-UTF-8 / symlink files are counted in the run summary;
+use `--verbose` to list them individually with the skip reason.
 
 ## Claude Code Integration
 
@@ -165,13 +185,19 @@ Add to `.claude/settings.json`:
 ## GitHub Action
 
 ```yaml
-- uses: tsukasaI/fini@v1
+- uses: tsukasaI/fini@v0.4.0
 ```
+
+Pin to a release tag as above, or to a full commit SHA for supply-chain hardening.
+
+The action runs `fini --check` by default. Note that fix mode (without `--check`)
+never fails on detection-only problems (TODOs, debug code, secrets) — always use
+`--check` when gating CI.
 
 ### Options
 
 ```yaml
-- uses: tsukasaI/fini@v1
+- uses: tsukasaI/fini@v0.4.0
   with:
     files: 'src/ tests/'         # Files/directories to check (default: .)
     check: 'true'                # Check mode, fail if issues found (default: true)
@@ -189,8 +215,13 @@ See [editors/vscode](./editors/vscode) for a VS Code extension that runs fini on
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
-| 1 | Problems found (`--check`) or error |
+| 0 | Success (no problems / fix completed) |
+| 1 | Problems found (`--check`) |
+| 2 | Runtime error (I/O failure, invalid config or exclude pattern) |
+
+Fix mode (without `--check`) exits 0 even when detection-only problems
+(TODOs, debug code, secrets) are reported — they are informational there.
+Use `fini --check` as the CI gate.
 
 ## Development
 

@@ -61,6 +61,9 @@ pub struct NormalizeResult {
     pub content: String,
     pub changed: bool,
     pub problems: Vec<Problem>,
+    /// Problems suppressed by `fini:ignore` directives — kept (not discarded)
+    /// so suppressions leave an audit trail in output and summaries.
+    pub suppressed: Vec<Problem>,
 }
 
 impl NormalizeResult {
@@ -182,11 +185,17 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         problems.extend(check_line_length(&result, max_length));
     }
 
-    // Filter out problems suppressed by inline ignore directives
+    // Filter out problems suppressed by inline ignore directives, keeping
+    // the suppressed ones so they stay auditable (issue #46)
+    let mut suppressed = vec![];
     if !problems.is_empty() {
         let ignore_map = ignore::parse_ignore_directives(&result);
         if !ignore_map.is_empty() {
-            problems.retain(|p| !ignore_map.is_ignored(p.line, &p.kind));
+            let (sup, kept): (Vec<_>, Vec<_>) = problems
+                .into_iter()
+                .partition(|p| ignore_map.is_ignored(p.line, &p.kind));
+            suppressed = sup;
+            problems = kept;
         }
     }
 
@@ -196,12 +205,45 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         content: result,
         changed,
         problems,
+        suppressed,
     }
+}
+
+/// Replace secret-matching lines with hint-only placeholders (see detect.rs).
+pub fn mask_secret_lines(content: &str) -> String {
+    detect::mask_secret_lines(content)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===========================================
+    // Suppression audit trail (issue #46)
+    // ===========================================
+
+    #[test]
+    fn test_ignored_problems_recorded_as_suppressed() {
+        let input = "password = \"supersecret123\" # fini:ignore secret\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(result
+            .problems
+            .iter()
+            .all(|p| !matches!(p.kind, ProblemKind::SecretPattern { .. })));
+        assert_eq!(result.suppressed.len(), 1);
+        assert!(matches!(
+            result.suppressed[0].kind,
+            ProblemKind::SecretPattern { .. }
+        ));
+    }
+
+    #[test]
+    fn test_no_directives_leaves_suppressed_empty() {
+        let input = "// TODO: fix this\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(result.suppressed.is_empty());
+        assert_eq!(result.problems.len(), 1);
+    }
 
     // ===========================================
     // EOF Newline Normalization

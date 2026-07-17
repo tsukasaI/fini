@@ -166,6 +166,42 @@ pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
         .collect()
 }
 
+/// Replace every line matching a secret pattern with a hint-only placeholder.
+///
+/// The checker deliberately reports secrets hint-only (the matched value never
+/// enters a `Problem`); diff output must honor the same contract, including
+/// unchanged context lines, so raw values never reach CI logs (issue #44).
+pub(super) fn mask_secret_lines(content: &str) -> String {
+    let patterns = &*SECRET_PATTERNS;
+    let mut out = String::with_capacity(content.len());
+
+    for line in content.split_inclusive('\n') {
+        let text = line.strip_suffix('\n').unwrap_or(line);
+        let hint = if SECRET_SKIP_PATTERNS.iter().any(|p| text.contains(p)) {
+            None
+        } else {
+            patterns
+                .iter()
+                .find(|p| p.regex.is_match(text))
+                .map(|p| p.hint)
+        };
+
+        match hint {
+            Some(hint) => {
+                out.push_str("[line masked: potential ");
+                out.push_str(hint);
+                out.push(']');
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            None => out.push_str(line),
+        }
+    }
+
+    out
+}
+
 pub(super) fn check_line_length(content: &str, max_length: usize) -> Vec<Problem> {
     content
         .lines()
@@ -314,6 +350,29 @@ mod tests {
     fn test_multiple_debug_on_same_line_reports_first() {
         let problems = detect_debug_code("console.log(dbg!(x));\n", false);
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_matching_line() {
+        let content = "password = \"supersecret123\"\nclean line\n";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("supersecret123"));
+        assert!(masked.contains("[line masked: potential hardcoded secret]"));
+        assert!(masked.contains("clean line\n"));
+    }
+
+    #[test]
+    fn test_mask_secret_lines_keeps_skip_patterns() {
+        let content = "password = process.env.PASSWORD\n";
+        assert_eq!(mask_secret_lines(content), content);
+    }
+
+    #[test]
+    fn test_mask_secret_lines_preserves_missing_eof_newline() {
+        let content = "token = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn\"";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.ends_with('\n'));
+        assert!(!masked.contains("ghp_"));
     }
 
     #[test]

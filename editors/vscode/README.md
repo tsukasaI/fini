@@ -15,7 +15,8 @@ Install fini:
 ```bash
 cargo install fini
 # or
-brew install tsukasaI/tap/fini
+brew tap tsukasaI/fini https://github.com/tsukasaI/fini
+brew install tsukasaI/fini/fini
 ```
 
 ## Extension Settings

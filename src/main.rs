@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -5,8 +6,9 @@ use std::process::ExitCode;
 use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
-    load_config, merge_normalize_config, normalize_content, parse_editorconfig, print_diff, run,
-    should_use_colors, CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode,
+    load_config, mask_secret_lines, merge_normalize_config, normalize_content, parse_editorconfig,
+    print_diff_to, run, should_use_colors, CliNormalizeOptions, Config, FiniToml, OutputContext,
+    OutputMode, ProblemKind,
 };
 
 #[derive(Parser)]
@@ -130,6 +132,19 @@ fn main() -> ExitCode {
     let normalize =
         merge_normalize_config(&cli_options, toml_config.as_ref().map(|c| &c.normalize));
 
+    // A repo-local fini.toml can turn off secret detection for the very repo
+    // being scanned (issue #45). Allowed, but never silent — and --quiet must
+    // not hide it, since it's a security-posture downgrade the scanned target
+    // controls.
+    if toml_config
+        .as_ref()
+        .and_then(|c| c.normalize.detect_secrets)
+        == Some(false)
+        && !cli.no_detect_secrets
+    {
+        eprintln!("Warning: config file disables secret detection (detect_secrets = false)");
+    }
+
     let output_mode = if cli.quiet {
         OutputMode::Quiet
     } else if cli.diff {
@@ -148,6 +163,7 @@ fn main() -> ExitCode {
             .unwrap_or_default()
     };
 
+    let mask_secrets = normalize.detect_secrets;
     let config = Config {
         check_only: cli.check,
         output_mode,
@@ -161,7 +177,13 @@ fn main() -> ExitCode {
     let verbose = cli.verbose && !cli.quiet;
     let show_progress = !cli.quiet && !cli.no_progress && std::io::stdout().is_terminal();
 
-    let ctx = OutputContext::new(output_mode, use_colors, verbose, show_progress);
+    let ctx = OutputContext::new(
+        output_mode,
+        use_colors,
+        verbose,
+        show_progress,
+        mask_secrets,
+    );
 
     match run(&cli.paths, &config, &ctx) {
         Ok(result) => {
@@ -208,11 +230,33 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     // Normalize content
     let result = normalize_content(&input, &normalize);
 
+    // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
+    for problem in &result.suppressed {
+        if let ProblemKind::SecretPattern { hint } = &problem.kind {
+            eprintln!(
+                "Warning: stdin:{} potential secret ({hint}) suppressed by fini:ignore",
+                problem.line
+            );
+        }
+    }
+
     if cli.check {
         if result.has_changes() || result.has_detection_problems() {
             if cli.diff {
-                // Print diff to stderr so stdout stays clean
-                print_diff("stdin", &input, &result.content);
+                // Diff goes to stderr so stdout keeps its "normalized content
+                // only" contract (issue #38), masked like every other diff
+                // path (issue #44)
+                let (orig, new): (Cow<str>, Cow<str>) = if normalize.detect_secrets {
+                    (
+                        Cow::Owned(mask_secret_lines(&input)),
+                        Cow::Owned(mask_secret_lines(&result.content)),
+                    )
+                } else {
+                    (Cow::Borrowed(&input), Cow::Borrowed(&result.content))
+                };
+                // Best-effort diagnostics: a closed stderr must not mask the
+                // check failure exit code
+                let _ = print_diff_to(&mut io::stderr().lock(), "stdin", &orig, &new);
             }
             return ExitCode::from(1);
         }

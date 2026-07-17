@@ -26,7 +26,9 @@ cargo fmt -- --check           # Format check (used in CI)
 Key design decisions:
 - File reads and normalization run in **parallel** (rayon), but output and file writes are **sequential** for thread-safety and deterministic ordering.
 - Config priority: CLI flags override TOML config, which overrides hardcoded defaults. See `config/merge.rs`.
-- Binary detection uses null-byte check in first 8192 bytes (`lib.rs:is_binary`).
+- Binary detection uses null-byte check in first 8192 bytes (`lib.rs:is_binary`). Classification (empty/UTF-16 BOM/binary) reads only that prefix before the rest of the file is read.
+- File writes are **atomic** (temp file + fsync + rename in the same directory, permissions preserved) and re-verify mtime/length just before writing; symlinks are skipped entirely. See `lib.rs:write_atomic`.
+- Secret detections are hint-only everywhere: check output prints hints, and all diff paths mask secret-matching lines (`normalize::mask_secret_lines`). Suppressed secret detections (`fini:ignore`) always leave an stderr audit trail.
 
 ### Module map
 
