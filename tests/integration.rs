@@ -11,6 +11,26 @@ fn fini_cmd() -> Command {
 // ===========================================
 
 #[test]
+fn test_version_output_shape_is_stable() {
+    // The VS Code extension parses `fini --version` on activation for its
+    // compatibility check (issue #43) — keep the `fini X.Y.Z` shape stable.
+    let output = fini_cmd().arg("--version").output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = stdout
+        .trim()
+        .strip_prefix("fini ")
+        .unwrap_or_else(|| panic!("version output must start with 'fini ': {stdout}"));
+    let parts: Vec<&str> = version.split('.').collect();
+    assert_eq!(parts.len(), 3, "version must be X.Y.Z: {version}");
+    for part in parts {
+        part.parse::<u32>()
+            .unwrap_or_else(|_| panic!("non-numeric version component {part:?}: {version}"));
+    }
+}
+
+#[test]
 fn test_check_mode_no_modification() {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("test.txt");
