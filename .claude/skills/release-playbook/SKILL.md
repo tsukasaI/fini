@@ -92,7 +92,7 @@ stale pins), use the global `actions-pin-audit` skill
 |---|---|---|---|
 | crates.io | — | none | yes, via `publish-crate` |
 | GitHub Release (tarballs + checksums.txt) | — | none | yes, via `release` job |
-| Homebrew | `HomebrewFormula/fini.rb` | bump `version` + all 4 `sha256` values (macOS x86_64/arm64, Linux x86_64/arm64) from the new release's `checksums.txt` | **no — manual today.** `Refs: tsukasaI/fini#2` (open issue: automate via same-repo bump or separate tap repo) |
+| Homebrew | `HomebrewFormula/fini.rb` | none — the `update-homebrew-formula` job in `release.yaml` downloads the release assets, verifies `checksums.txt`, regenerates the formula via `scripts/update-homebrew-formula.sh`, and pushes to `main`. After a release, `git pull` and confirm the bot commit landed | yes, via `update-homebrew-formula` (tsukasaI/fini#2) |
 | Nix flake | `flake.nix` | bump `version = "X.Y.Z"` string only — `cargoLock.lockFile` points at `Cargo.lock`, no hash to update | no — manual, single-line edit |
 | pre-commit hook | `.pre-commit-hooks.yaml` | none — `entry: fini` is unpinned, always resolves to whatever `fini` is on `PATH` | n/a, no version reference |
 | GitHub Action | `action.yaml` | no version bump needed (resolves `latest` release or caller-pinned version at runtime); but reconsider the `verify-attestation` input default (`false`) — its own comment says flip callers to `true` "once your pinned fini version has attestations (releases after v0.3.0)", which is now true for every release | manual awareness, not a file edit |
