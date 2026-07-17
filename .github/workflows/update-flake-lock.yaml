@@ -1,0 +1,28 @@
+name: Update flake.lock
+
+# Renewal mechanism for the committed flake.lock pin: without this, the lock
+# would silently rot while README's `nix run github:tsukasaI/fini` keeps
+# resolving it.
+on:
+  schedule:
+    - cron: "0 3 1 * *" # monthly, 1st at 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # push the lockfile-update branch
+      pull-requests: write  # open the update PR
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
+        with:
+          pr-title: "chore(nix): update flake.lock"
+          commit-msg: "chore(nix): update flake.lock"
