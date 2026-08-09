@@ -123,6 +123,28 @@ pub(super) fn detect_fixme_comments(content: &str) -> Vec<Problem> {
     detect_comment_markers(content, "FIXME", ProblemKind::FixmeComment)
 }
 
+/// Substring search requiring a left word boundary at the match start (the preceding
+/// byte, if any, must not be ASCII alphanumeric or `_`). Unlike `is_valid_marker`,
+/// which checks the boundary *after* a marker, call-like patterns such as
+/// `println!(` need the boundary checked *before* them, so a match inside
+/// `eprintln!(` (offset 1) doesn't count.
+fn contains_word_boundary(line: &str, pattern: &str) -> bool {
+    let bytes = line.as_bytes();
+    let plen = pattern.len();
+    if plen == 0 {
+        return false;
+    }
+    for i in 0..bytes.len().saturating_sub(plen - 1) {
+        if bytes[i..i + plen] == *pattern.as_bytes() {
+            let before = if i == 0 { None } else { Some(bytes[i - 1]) };
+            if !matches!(before, Some(b) if b.is_ascii_alphanumeric() || b == b'_') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem> {
     let extra: &[&str] = if strict_mode { STRICT_DEBUG_EXTRA } else { &[] };
 
@@ -133,7 +155,7 @@ pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem
             DEBUG_PATTERNS
                 .iter()
                 .chain(extra.iter())
-                .find(|p| line.contains(*p))
+                .find(|p| contains_word_boundary(line, p))
                 .map(|pattern| Problem {
                     line: line_idx + 1,
                     kind: ProblemKind::DebugCode {
@@ -275,10 +297,17 @@ mod tests {
 
     #[test]
     fn test_debug_strict_includes_eprintln() {
-        // Note: "eprintln!(" contains "println!(" as substring, so non-strict also matches
-        // Strict mode adds the explicit "eprintln!(" pattern
-        assert_eq!(detect_debug_code("eprintln!(\"fail\");\n", false).len(), 1);
+        // "eprintln!(" contains "println!(" as a substring, but not at a word
+        // boundary (preceded by 'e'), so non-strict mode must not flag it.
+        assert!(detect_debug_code("eprintln!(\"fail\");\n", false).is_empty());
         assert_eq!(detect_debug_code("eprintln!(\"fail\");\n", true).len(), 1);
+    }
+
+    #[test]
+    fn test_debug_print_requires_word_boundary() {
+        // "print(" must not match inside "sprint(" / "pprint(".
+        assert!(detect_debug_code("sprint(x);\n", false).is_empty());
+        assert!(detect_debug_code("pprint(x);\n", false).is_empty());
     }
 
     #[test]
