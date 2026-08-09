@@ -1,28 +1,28 @@
 class Fini < Formula
   desc "A lightweight file normalization CLI tool for AI coding agents"
   homepage "https://github.com/tsukasaI/fini"
-  version "0.4.0"
+  version "0.5.0"
   license "MIT"
 
   on_macos do
     on_intel do
       url "https://github.com/tsukasaI/fini/releases/download/v#{version}/fini-x86_64-apple-darwin.tar.gz"
-      sha256 "106c0d0ebfbf29f2fbb730c375f3f70fe37ba0c6e746d8b25b324e113660ba72"
+      sha256 "c815dd5a5a03bbf7e6b9767fff345c3cde6bcd28e7053184a88e777d304c7ebb"
     end
     on_arm do
       url "https://github.com/tsukasaI/fini/releases/download/v#{version}/fini-aarch64-apple-darwin.tar.gz"
-      sha256 "f30a6661857bf255deaf4c39d7c2e55af47359b947d9137ac5b787a8343a1cd1"
+      sha256 "de4b0b88cd78c4c3e7078c59aa12260d0fa9a91e9929ab9175a1049c88bdecfc"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/tsukasaI/fini/releases/download/v#{version}/fini-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "6c9b6affe64353cdf2bed3d5e36f72b08b1d2a71f4b8fbf090b0e8d65ed4e4e4"
+      sha256 "3945e068c7b1a484e5cdfd735e37b2f643deec7b96d8953333a40fb96f5aaaa2"
     end
     on_arm do
       url "https://github.com/tsukasaI/fini/releases/download/v#{version}/fini-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "83d544413344d26ae96855a389fa2d6e1a46c5ecfac9bc9e01f11dc4c28d8ca7"
+      sha256 "d6f3367088aaf5fb477c4969a475b8063147dbb67e58806f7b40fbc34b304371"
     end
   end
 
