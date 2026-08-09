@@ -6,9 +6,9 @@ use std::process::ExitCode;
 use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
-    load_config, mask_secret_lines, merge_normalize_config, normalize_content, parse_editorconfig,
-    print_diff_to, run, should_use_colors, CliNormalizeOptions, Config, FiniToml, OutputContext,
-    OutputMode, ProblemKind,
+    load_config, mask_secret_lines, merge_exclude_patterns, merge_normalize_config,
+    normalize_content, parse_editorconfig, print_diff_to, run, should_use_colors,
+    CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
 #[derive(Parser)]
@@ -141,13 +141,11 @@ fn main() -> ExitCode {
     // A repo-local fini.toml can turn off secret detection for the very repo
     // being scanned (issue #45). Allowed, but never silent — and --quiet must
     // not hide it, since it's a security-posture downgrade the scanned target
-    // controls.
-    if toml_config
-        .as_ref()
-        .and_then(|c| c.normalize.detect_secrets)
-        == Some(false)
-        && !cli.no_detect_secrets
-    {
+    // controls. merge_normalize_config's precedence is CLI > TOML > default(true),
+    // so the merged result can only be false here if TOML set it to false and
+    // the CLI didn't ask to disable it - checking the merge output instead of
+    // re-inspecting toml_config directly.
+    if !normalize.detect_secrets && !cli.no_detect_secrets {
         eprintln!("Warning: config file disables secret detection (detect_secrets = false)");
     }
 
@@ -160,14 +158,10 @@ fn main() -> ExitCode {
     };
 
     // Merge exclude patterns: CLI --exclude takes precedence, else TOML exclude
-    let exclude_patterns = if !cli.exclude.is_empty() {
-        cli.exclude.clone()
-    } else {
-        toml_config
-            .as_ref()
-            .and_then(|c| c.exclude.clone())
-            .unwrap_or_default()
-    };
+    let exclude_patterns = merge_exclude_patterns(
+        &cli.exclude,
+        toml_config.as_ref().and_then(|c| c.exclude.as_deref()),
+    );
 
     let mask_secrets = normalize.detect_secrets;
     let config = Config {

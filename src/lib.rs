@@ -8,8 +8,8 @@ pub mod walker;
 pub use colors::{should_use_colors, Colors};
 pub use config::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
-    load_config, merge_normalize_config, parse_editorconfig, CliNormalizeOptions, ConfigError,
-    FiniToml, NormalizeSection, FINI_TOML_TEMPLATE,
+    load_config, merge_exclude_patterns, merge_normalize_config, parse_editorconfig,
+    CliNormalizeOptions, ConfigError, FiniToml, NormalizeSection, FINI_TOML_TEMPLATE,
 };
 pub use normalize::{
     mask_secret_lines, normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind,

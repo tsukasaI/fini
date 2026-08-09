@@ -92,6 +92,22 @@ pub fn merge_normalize_config(
     }
 }
 
+/// Merge exclude patterns from CLI and TOML.
+///
+/// Priority: CLI > TOML > default (empty). Unlike `merge_normalize_config`,
+/// this isn't a field-by-field merge - a non-empty CLI `--exclude` list wins
+/// outright, since there's no per-pattern precedence to reconcile.
+pub fn merge_exclude_patterns(
+    cli_exclude: &[String],
+    toml_exclude: Option<&[String]>,
+) -> Vec<String> {
+    if !cli_exclude.is_empty() {
+        cli_exclude.to_vec()
+    } else {
+        toml_exclude.map(<[String]>::to_vec).unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +243,33 @@ mod tests {
         assert!(config.remove_zero_width); // keep=false -> remove=true
         assert!(config.remove_leading_blanks); // keep=false -> remove=true
         assert!(config.fix_code_blocks);
+    }
+
+    #[test]
+    fn test_merge_exclude_defaults_only() {
+        let result = merge_exclude_patterns(&[], None);
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_merge_exclude_toml_overrides_defaults() {
+        let toml = vec!["*.log".to_string(), "dist/".to_string()];
+        let result = merge_exclude_patterns(&[], Some(&toml));
+        assert_eq!(result, toml);
+    }
+
+    #[test]
+    fn test_merge_exclude_cli_overrides_toml() {
+        let cli = vec!["*.tmp".to_string()];
+        let toml = vec!["*.log".to_string(), "dist/".to_string()];
+        let result = merge_exclude_patterns(&cli, Some(&toml));
+        assert_eq!(result, cli);
+    }
+
+    #[test]
+    fn test_merge_exclude_cli_only() {
+        let cli = vec!["*.tmp".to_string()];
+        let result = merge_exclude_patterns(&cli, None);
+        assert_eq!(result, cli);
     }
 }
