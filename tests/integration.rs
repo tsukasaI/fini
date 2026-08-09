@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -204,6 +205,62 @@ fn test_multiple_files() {
 
     assert_eq!(fs::read_to_string(&file1).unwrap(), "hello\n");
     assert_eq!(fs::read_to_string(&file2).unwrap(), "world\n");
+}
+
+#[test]
+fn test_many_files_preserve_order_and_identity_across_chunks() {
+    // Regression test for the chunked-processing refactor in `run()`: files are
+    // now processed in fixed-size batches (CHUNK_SIZE in src/lib.rs) instead of
+    // all at once. Two things a batching bug could break:
+    //   1. pairing — one file's fix landing in another file (chunk-boundary mixup)
+    //   2. ordering — output no longer matches walk order across chunk boundaries
+    // Use more files than CHUNK_SIZE so the run spans multiple chunks. Passing
+    // them as explicit CLI args (rather than walking a directory) pins the input
+    // order to something this test controls and can assert against — directory
+    // walk order is filesystem-dependent and not something a test should assume.
+    let dir = TempDir::new().unwrap();
+    let file_count = 600;
+    let mut cmd = fini_cmd();
+    cmd.arg("--quiet");
+    for i in 0..file_count {
+        let path = dir.path().join(format!("file{i:04}.txt"));
+        // Missing EOF newline (needs a fix) so every file is printed and written.
+        fs::write(&path, format!("content-{i}")).unwrap();
+        cmd.arg(&path);
+    }
+
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    for i in 0..file_count {
+        let content = fs::read_to_string(dir.path().join(format!("file{i:04}.txt"))).unwrap();
+        assert_eq!(
+            content,
+            format!("content-{i}\n"),
+            "mismatch for file{i:04}.txt"
+        );
+    }
+
+    // --quiet prints exactly one line (the path) per fixed file, in apply order.
+    // Extract each file's index from its printed path and confirm the sequence
+    // is exactly 0..file_count — not just "no crash", but "order preserved".
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let indices: Vec<usize> = stdout
+        .lines()
+        .map(|line| {
+            let name = Path::new(line.trim())
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap();
+            name.strip_prefix("file").unwrap().parse().unwrap()
+        })
+        .collect();
+    let expected: Vec<usize> = (0..file_count).collect();
+    assert_eq!(
+        indices, expected,
+        "output order must match input walk order"
+    );
 }
 
 #[test]
@@ -427,6 +484,71 @@ fix_code_blocks = true
         "check failed after fix: {}",
         String::from_utf8_lossy(&check_output.stdout)
     );
+}
+
+#[test]
+fn test_invalid_config_toml_exits_2() {
+    // A syntactically invalid fini.toml must be a hard failure (exit 2), not
+    // a warning that silently falls back to defaults.
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("fini.toml");
+    fs::write(&config_path, "invalid toml {{{\n").unwrap();
+
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_config_unknown_key_exits_2() {
+    // A typo'd key (e.g. max_blank_line instead of max_blank_lines) must be
+    // rejected outright, not silently ignored while the rest of the config
+    // (or defaults) apply.
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("fini.toml");
+    fs::write(&config_path, "[normalize]\nmax_blank_line = 2\n").unwrap();
+
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_explicit_config_path_missing_exits_2() {
+    // An explicit --config pointing at a nonexistent file is also a hard
+    // failure, not a silent fallback to defaults.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--config")
+        .arg(dir.path().join("does-not-exist.toml").to_str().unwrap())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error"), "stderr: {stderr}");
 }
 
 // ===========================================
@@ -658,6 +780,27 @@ fn test_exit_code_1_on_check_mode_problems() {
 }
 
 #[test]
+fn test_check_mode_reports_extra_trailing_newlines_with_crlf() {
+    // Regression test: trailing-newline counting must not undercount CRLF
+    // line endings (each "\r\n" is one newline, not zero).
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "X\r\n\r\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("extra trailing newline(s) removed"),
+        "expected extra trailing newline(s) removed message, got: {stdout}"
+    );
+}
+
+#[test]
 fn test_exit_code_2_on_invalid_exclude_pattern() {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("test.txt");
@@ -872,6 +1015,34 @@ fn test_diff_masks_secret_lines() {
 }
 
 #[test]
+fn test_check_diff_shows_detection_only_problems() {
+    // Regression test: a file whose only problems are detection-only
+    // (secret pattern here; same applies to TODO/FIXME/debug/long-line)
+    // never changes result.content vs original, so `--check --diff` used to
+    // print an empty `---`/`+++` diff and return before ever reaching the
+    // problem list, silently dropping the secret hint (exit 1 with no
+    // indication why). The problem list must still print even when there's
+    // no content diff to show.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("secret.py");
+    fs::write(&file, "password = \"supersecret123\"\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("potential secret"),
+        "secret hint missing from --check --diff output: {stdout}"
+    );
+}
+
+#[test]
 fn test_stdin_check_diff_goes_to_stderr() {
     // Regression test for issue #38: --stdin --check --diff must keep stdout
     // clean (its contract is "normalized content only") and put the diff on
@@ -910,6 +1081,43 @@ fn test_stdin_check_diff_goes_to_stderr() {
         stderr.contains("+++ stdin"),
         "diff missing on stderr: {stderr}"
     );
+}
+
+#[test]
+fn test_diff_mode_previews_without_writing() {
+    // Regression test: README documents `fini --diff .` as "Preview changes",
+    // but bare --diff used to write the normalized content to disk anyway
+    // (only --check --diff skipped the write). --diff alone must be a
+    // read-only preview: print a diff, leave the file untouched, exit 0.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap(); // missing EOF newline
+
+    let before_content = fs::read(&file).unwrap();
+    let before_mtime = fs::metadata(&file).unwrap().modified().unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("---"), "missing diff header: {stdout}");
+    assert!(stdout.contains("+++"), "missing diff header: {stdout}");
+
+    let after_content = fs::read(&file).unwrap();
+    let after_mtime = fs::metadata(&file).unwrap().modified().unwrap();
+    assert_eq!(
+        before_content, after_content,
+        "--diff must not modify file content"
+    );
+    assert_eq!(
+        before_mtime, after_mtime,
+        "--diff must not touch the file (mtime changed)"
+    );
+
+    assert_eq!(output.status.code(), Some(0));
 }
 
 // ===========================================

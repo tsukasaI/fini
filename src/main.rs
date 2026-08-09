@@ -6,9 +6,9 @@ use std::process::ExitCode;
 use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
-    load_config, mask_secret_lines, merge_normalize_config, normalize_content, parse_editorconfig,
-    print_diff_to, run, should_use_colors, CliNormalizeOptions, Config, FiniToml, OutputContext,
-    OutputMode, ProblemKind,
+    load_config, mask_secret_lines, merge_exclude_patterns, merge_normalize_config,
+    normalize_content, parse_editorconfig, print_diff_to, run, should_use_colors,
+    CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
 #[derive(Parser)]
@@ -107,41 +107,39 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Handle --init command
     if cli.init {
         return handle_init();
     }
 
-    // Handle --stdin command
     if cli.stdin {
         return handle_stdin(&cli);
     }
 
-    // Load configuration
-    let toml_config = load_configuration(&cli.config, cli.quiet);
+    let toml_config = match load_configuration(&cli.config, cli.quiet) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::from(2);
+        }
+    };
 
-    // Check for editorconfig conflicts (informational warnings)
     if !cli.quiet {
         check_editorconfig_warnings();
     }
 
-    // Build CLI options for merging
     let cli_options = build_cli_options(&cli);
 
-    // Merge configurations: CLI > TOML > defaults
     let normalize =
         merge_normalize_config(&cli_options, toml_config.as_ref().map(|c| &c.normalize));
 
     // A repo-local fini.toml can turn off secret detection for the very repo
     // being scanned (issue #45). Allowed, but never silent — and --quiet must
     // not hide it, since it's a security-posture downgrade the scanned target
-    // controls.
-    if toml_config
-        .as_ref()
-        .and_then(|c| c.normalize.detect_secrets)
-        == Some(false)
-        && !cli.no_detect_secrets
-    {
+    // controls. merge_normalize_config's precedence is CLI > TOML > default(true),
+    // so the merged result can only be false here if TOML set it to false and
+    // the CLI didn't ask to disable it - checking the merge output instead of
+    // re-inspecting toml_config directly.
+    if !normalize.detect_secrets && !cli.no_detect_secrets {
         eprintln!("Warning: config file disables secret detection (detect_secrets = false)");
     }
 
@@ -154,14 +152,10 @@ fn main() -> ExitCode {
     };
 
     // Merge exclude patterns: CLI --exclude takes precedence, else TOML exclude
-    let exclude_patterns = if !cli.exclude.is_empty() {
-        cli.exclude.clone()
-    } else {
-        toml_config
-            .as_ref()
-            .and_then(|c| c.exclude.clone())
-            .unwrap_or_default()
-    };
+    let exclude_patterns = merge_exclude_patterns(
+        &cli.exclude,
+        toml_config.as_ref().and_then(|c| c.exclude.as_deref()),
+    );
 
     let mask_secrets = normalize.detect_secrets;
     let config = Config {
@@ -171,8 +165,6 @@ fn main() -> ExitCode {
         exclude_patterns,
     };
 
-    // Determine color, verbose, and progress settings
-    // --quiet overrides --verbose
     let use_colors = should_use_colors(cli.color, cli.no_color);
     let verbose = cli.verbose && !cli.quiet;
     let show_progress = !cli.quiet && !cli.no_progress && std::io::stdout().is_terminal();
@@ -216,18 +208,15 @@ fn handle_init() -> ExitCode {
 }
 
 fn handle_stdin(cli: &Cli) -> ExitCode {
-    // Read from stdin
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("Error reading stdin: {e}");
         return ExitCode::from(2);
     }
 
-    // Build normalize config
     let cli_options = build_cli_options(cli);
     let normalize = merge_normalize_config(&cli_options, None);
 
-    // Normalize content
     let result = normalize_content(&input, &normalize);
 
     // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
@@ -263,7 +252,6 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Normal mode: output normalized content to stdout
     print!("{}", result.content);
     if let Err(e) = io::stdout().flush() {
         eprintln!("Error writing stdout: {e}");
@@ -273,25 +261,37 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_configuration(explicit_path: &Option<PathBuf>, quiet: bool) -> Option<FiniToml> {
+/// Load fini.toml, if one applies.
+///
+/// `Ok(None)` means no config file was found (explicit `--config` unset, and
+/// none discovered upward) - defaults apply silently, as documented. Once a
+/// path is resolved (explicit or discovered), that file existing but failing
+/// to load - I/O error or TOML parse error, including a `deny_unknown_fields`
+/// rejection - is a hard failure: a typo'd key must never silently fall back
+/// to defaults (see README's exit-code table).
+fn load_configuration(
+    explicit_path: &Option<PathBuf>,
+    quiet: bool,
+) -> Result<Option<FiniToml>, String> {
     let config_path = explicit_path.clone().or_else(|| {
         std::env::current_dir()
             .ok()
             .and_then(|d| find_config_file(&d))
     });
 
-    config_path.and_then(|p| match load_config(&p) {
+    let Some(p) = config_path else {
+        return Ok(None);
+    };
+
+    match load_config(&p) {
         Ok(config) => {
             if !quiet {
                 eprintln!("Using config: {}", p.display());
             }
-            Some(config)
+            Ok(Some(config))
         }
-        Err(e) => {
-            eprintln!("Warning: Failed to load {}: {}", p.display(), e);
-            None
-        }
-    })
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    }
 }
 
 fn check_editorconfig_warnings() {

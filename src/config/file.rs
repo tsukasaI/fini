@@ -7,12 +7,9 @@ use std::path::{Path, PathBuf};
 
 use super::toml_schema::FiniToml;
 
-/// Error type for configuration loading
 #[derive(Debug)]
 pub enum ConfigError {
-    /// IO error reading the file
     Io(io::Error),
-    /// TOML parsing error
     Parse(toml::de::Error),
 }
 
@@ -83,7 +80,6 @@ pub fn find_config_file(start_dir: &Path) -> Option<PathBuf> {
     find_file_upward(start_dir, "fini.toml", true)
 }
 
-/// Load and parse fini.toml from the given path.
 pub fn load_config(path: &Path) -> Result<FiniToml, ConfigError> {
     let content = fs::read_to_string(path)?;
     let config: FiniToml = toml::from_str(&content)?;
@@ -122,13 +118,11 @@ mod tests {
     #[test]
     fn test_find_config_stops_at_git_root() {
         let dir = TempDir::new().unwrap();
-        // Create .git directory to mark git root
         fs::create_dir(dir.path().join(".git")).unwrap();
 
         let subdir = dir.path().join("subdir");
         fs::create_dir(&subdir).unwrap();
 
-        // No config in this tree
         let found = find_config_file(&subdir);
         assert_eq!(found, None);
     }
@@ -207,6 +201,27 @@ fix_code_blocks = true
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("fini.toml");
         fs::write(&config_path, "invalid toml {{{\n").unwrap();
+
+        let result = load_config(&config_path);
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
+    }
+
+    #[test]
+    fn test_load_config_rejects_unknown_top_level_key() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("fini.toml");
+        fs::write(&config_path, "not_a_real_key = true\n").unwrap();
+
+        let result = load_config(&config_path);
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
+    }
+
+    #[test]
+    fn test_load_config_rejects_unknown_normalize_key() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("fini.toml");
+        // Typo'd key must be rejected, not silently ignored.
+        fs::write(&config_path, "[normalize]\nmax_blank_line = 2\n").unwrap();
 
         let result = load_config(&config_path);
         assert!(matches!(result, Err(ConfigError::Parse(_))));

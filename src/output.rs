@@ -19,6 +19,17 @@ pub struct Config {
     pub exclude_patterns: Vec<String>,
 }
 
+impl Config {
+    /// Whether normalized content should actually be written to disk.
+    /// Check mode never writes (`check_only` also gates the exit-code check
+    /// in main.rs and keeps that meaning); `--diff` alone is a preview per
+    /// the README ("Preview changes") and must not write either.
+    #[must_use]
+    pub fn should_write(&self) -> bool {
+        !self.check_only && self.output_mode != OutputMode::Diff
+    }
+}
+
 pub struct OutputContext {
     pub mode: OutputMode,
     pub colors: Colors,
@@ -80,26 +91,55 @@ pub fn print_check_result(
         return;
     }
 
-    println!(
-        "{}Error:{} {}",
-        ctx.colors.error,
-        ctx.colors.reset(),
-        path.display()
-    );
-
-    if result.has_changes() {
-        if !original.ends_with('\n') && result.content.ends_with('\n') {
-            println!("  - missing EOF newline");
+    if ctx.mode == OutputMode::Diff {
+        // Mirrors print_fix_result's Diff branch: masked the same way
+        // (issue #44's contract applies to every diff path, not just fix
+        // mode). Unlike print_fix_result, we don't return early: detection-
+        // only problems (TODO/FIXME/debug/secret/long-line) never change
+        // result.content, so there's no diff to show them in — they're only
+        // visible via the problem list below, which must still run. When
+        // there IS a content diff, skip the empty `---`/`+++` header instead
+        // of printing a diff with no body.
+        if result.has_changes() {
+            let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
+            print_diff(&path.display().to_string(), &orig, &new);
         }
+    } else {
+        println!(
+            "{}Error:{} {}",
+            ctx.colors.error,
+            ctx.colors.reset(),
+            path.display()
+        );
 
-        for (i, (orig_line, _)) in original.lines().zip(result.content.lines()).enumerate() {
-            if orig_line.len() != orig_line.trim_end().len() {
-                println!("  - trailing whitespace at line {}", i + 1);
+        if result.has_changes() {
+            let orig_trimmed = original.trim_end_matches(['\n', '\r']);
+            let orig_trailing_newlines = original[orig_trimmed.len()..]
+                .chars()
+                .filter(|&c| c == '\n')
+                .count();
+            let result_trimmed = result.content.trim_end_matches(['\n', '\r']);
+            let result_trailing_newlines = result.content[result_trimmed.len()..]
+                .chars()
+                .filter(|&c| c == '\n')
+                .count();
+
+            if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
+                println!("  - missing EOF newline");
+            } else if orig_trailing_newlines > 1
+                && result_trailing_newlines < orig_trailing_newlines
+            {
+                println!("  - extra trailing newline(s) removed");
+            }
+
+            for (i, orig_line) in original.lines().enumerate() {
+                if orig_line.len() != orig_line.trim_end().len() {
+                    println!("  - trailing whitespace at line {}", i + 1);
+                }
             }
         }
     }
 
-    // Problems from normalization
     for problem in &result.problems {
         match &problem.kind {
             ProblemKind::FullWidthSpace => {
@@ -155,7 +195,6 @@ pub fn print_fix_result(
             print_diff(&path.display().to_string(), &orig, &new);
         }
         OutputMode::Normal => {
-            // Print warnings for full-width spaces
             for problem in result
                 .problems
                 .iter()
@@ -275,10 +314,18 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
         }
     } else {
         if result.files_fixed > 0 {
+            // Bare --diff previews changes without writing them (README:
+            // "Preview changes"), so the count is what *would* be fixed.
+            let label = if config.should_write() {
+                "files fixed"
+            } else {
+                "files would be fixed"
+            };
             parts.push(format!(
-                "{}{} files fixed{}",
+                "{}{} {}{}",
                 ctx.colors.success,
                 result.files_fixed,
+                label,
                 ctx.colors.reset()
             ));
         }

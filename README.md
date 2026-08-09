@@ -62,6 +62,9 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 ### Options
 
 ```
+-c, --check             Check only (no modifications), exit 1 if problems found
+-d, --diff              Show changes in diff format
+-q, --quiet             Output only modified file names
 -v, --verbose           Show all processed files (including clean ones)
 --stdin                 Read from stdin, output to stdout
 --color                 Force colored output
@@ -71,6 +74,12 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --keep-zero-width       Keep zero-width characters (default: remove)
 --keep-leading-blanks   Keep leading blank lines (default: remove)
 --fix-code-blocks       Remove code block remnants (```lang markers)
+--no-detect-todos       Skip TODO comment detection
+--no-detect-fixmes      Skip FIXME comment detection
+--no-detect-debug       Skip debug code detection
+--strict-debug          Include console.error/eprintln in debug code detection
+--no-detect-secrets     Skip secret pattern detection
+--max-line-length <N>   Maximum line length (warn if exceeded)
 --exclude <PATTERN>     Exclude files matching glob pattern (repeatable)
 --init                  Generate fini.toml configuration template
 --config <PATH>         Use specific config file

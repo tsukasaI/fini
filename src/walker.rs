@@ -201,9 +201,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_per_entry_walk_error_does_not_abort_walk() {
-        // Regression test for issue #32: a permission error on one subdirectory
-        // must surface as an `Err` item, not silently swallow the rest of the
-        // walk. Sibling files should still be yielded.
+        // Regression test for issue #32.
         use std::os::unix::fs::PermissionsExt;
 
         let dir = TempDir::new().unwrap();

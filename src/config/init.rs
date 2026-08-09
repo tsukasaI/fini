@@ -96,7 +96,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("fini.toml");
 
-        // Create existing file
         fs::write(&config_path, "existing").unwrap();
 
         let result = generate_init_file_in(Some(dir.path()));
@@ -106,7 +105,6 @@ mod tests {
 
     #[test]
     fn test_template_is_valid_toml() {
-        // Verify the template can be parsed
         let parsed: Result<super::super::toml_schema::FiniToml, _> =
             toml::from_str(FINI_TOML_TEMPLATE);
         assert!(parsed.is_ok());

@@ -98,29 +98,53 @@ fn is_valid_marker(line: &str, marker: &str) -> bool {
     false
 }
 
-fn detect_comment_markers(content: &str, marker: &str, kind: ProblemKind) -> Vec<Problem> {
-    content
-        .lines()
-        .enumerate()
-        .filter_map(|(line_idx, line)| {
-            if is_valid_marker(line, marker) {
-                Some(Problem {
-                    line: line_idx + 1,
-                    kind: kind.clone(),
-                })
-            } else {
-                None
+/// Detects TODO and FIXME markers in a single pass over `content`'s lines
+/// (each line is checked for both markers instead of scanning the file twice).
+/// Returns the two problem kinds in separate vecs, each in line order, so
+/// callers that gate TODO/FIXME detection independently can extend their
+/// combined problem list with either or both without reordering results.
+pub(super) fn detect_todo_and_fixme_comments(content: &str) -> (Vec<Problem>, Vec<Problem>) {
+    let mut todos = Vec::new();
+    let mut fixmes = Vec::new();
+
+    for (line_idx, line) in content.lines().enumerate() {
+        if is_valid_marker(line, "TODO") {
+            todos.push(Problem {
+                line: line_idx + 1,
+                kind: ProblemKind::TodoComment,
+            });
+        }
+        if is_valid_marker(line, "FIXME") {
+            fixmes.push(Problem {
+                line: line_idx + 1,
+                kind: ProblemKind::FixmeComment,
+            });
+        }
+    }
+
+    (todos, fixmes)
+}
+
+/// Substring search requiring a left word boundary at the match start (the preceding
+/// byte, if any, must not be ASCII alphanumeric or `_`). Unlike `is_valid_marker`,
+/// which checks the boundary *after* a marker, call-like patterns such as
+/// `println!(` need the boundary checked *before* them, so a match inside
+/// `eprintln!(` (offset 1) doesn't count.
+fn contains_word_boundary(line: &str, pattern: &str) -> bool {
+    let bytes = line.as_bytes();
+    let plen = pattern.len();
+    if plen == 0 {
+        return false;
+    }
+    for i in 0..bytes.len().saturating_sub(plen - 1) {
+        if bytes[i..i + plen] == *pattern.as_bytes() {
+            let before = if i == 0 { None } else { Some(bytes[i - 1]) };
+            if !matches!(before, Some(b) if b.is_ascii_alphanumeric() || b == b'_') {
+                return true;
             }
-        })
-        .collect()
-}
-
-pub(super) fn detect_todo_comments(content: &str) -> Vec<Problem> {
-    detect_comment_markers(content, "TODO", ProblemKind::TodoComment)
-}
-
-pub(super) fn detect_fixme_comments(content: &str) -> Vec<Problem> {
-    detect_comment_markers(content, "FIXME", ProblemKind::FixmeComment)
+        }
+    }
+    false
 }
 
 pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem> {
@@ -133,7 +157,7 @@ pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem
             DEBUG_PATTERNS
                 .iter()
                 .chain(extra.iter())
-                .find(|p| line.contains(*p))
+                .find(|p| contains_word_boundary(line, p))
                 .map(|pattern| Problem {
                     line: line_idx + 1,
                     kind: ProblemKind::DebugCode {
@@ -229,26 +253,36 @@ mod tests {
 
     #[test]
     fn test_todo_basic() {
-        let problems = detect_todo_comments("// TODO: fix this\n");
-        assert_eq!(problems.len(), 1);
-        assert_eq!(problems[0].line, 1);
+        let (todos, _) = detect_todo_and_fixme_comments("// TODO: fix this\n");
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].line, 1);
     }
 
     #[test]
     fn test_todo_case_insensitive() {
-        assert_eq!(detect_todo_comments("// todo: fix\n").len(), 1);
-        assert_eq!(detect_todo_comments("// Todo fix\n").len(), 1);
+        assert_eq!(detect_todo_and_fixme_comments("// todo: fix\n").0.len(), 1);
+        assert_eq!(detect_todo_and_fixme_comments("// Todo fix\n").0.len(), 1);
     }
 
     #[test]
     fn test_todo_requires_word_boundary() {
-        assert!(detect_todo_comments("use todoist;\n").is_empty());
+        assert!(detect_todo_and_fixme_comments("use todoist;\n")
+            .0
+            .is_empty());
     }
 
     #[test]
     fn test_fixme_detected() {
-        let problems = detect_fixme_comments("# FIXME: broken\n");
-        assert_eq!(problems.len(), 1);
+        let (_, fixmes) = detect_todo_and_fixme_comments("# FIXME: broken\n");
+        assert_eq!(fixmes.len(), 1);
+    }
+
+    #[test]
+    fn test_todo_and_fixme_single_pass_separates_kinds() {
+        let (todos, fixmes) =
+            detect_todo_and_fixme_comments("// TODO: first\n// FIXME: second\n// TODO: third\n");
+        assert_eq!(todos.iter().map(|p| p.line).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(fixmes.iter().map(|p| p.line).collect::<Vec<_>>(), [2]);
     }
 
     #[test]
@@ -275,10 +309,16 @@ mod tests {
 
     #[test]
     fn test_debug_strict_includes_eprintln() {
-        // Note: "eprintln!(" contains "println!(" as substring, so non-strict also matches
-        // Strict mode adds the explicit "eprintln!(" pattern
-        assert_eq!(detect_debug_code("eprintln!(\"fail\");\n", false).len(), 1);
+        // "eprintln!(" contains "println!(" as a substring, but not at a word
+        // boundary (preceded by 'e'), so non-strict mode must not flag it.
+        assert!(detect_debug_code("eprintln!(\"fail\");\n", false).is_empty());
         assert_eq!(detect_debug_code("eprintln!(\"fail\");\n", true).len(), 1);
+    }
+
+    #[test]
+    fn test_debug_print_requires_word_boundary() {
+        assert!(detect_debug_code("sprint(x);\n", false).is_empty());
+        assert!(detect_debug_code("pprint(x);\n", false).is_empty());
     }
 
     #[test]
@@ -341,7 +381,7 @@ mod tests {
     fn test_line_length_multibyte_shortcut() {
         // 6 multibyte chars = 6 char count but 18 byte length
         // byte length > limit but char count <= limit should pass
-        let line = "ああああああ\n"; // 6 chars, 18 bytes
+        let line = "ああああああ\n";
         assert!(check_line_length(line, 6).is_empty());
         assert_eq!(check_line_length(line, 5).len(), 1);
     }

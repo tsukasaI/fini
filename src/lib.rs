@@ -8,8 +8,8 @@ pub mod walker;
 pub use colors::{should_use_colors, Colors};
 pub use config::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
-    load_config, merge_normalize_config, parse_editorconfig, CliNormalizeOptions, ConfigError,
-    FiniToml, NormalizeSection, FINI_TOML_TEMPLATE,
+    load_config, merge_exclude_patterns, merge_normalize_config, parse_editorconfig,
+    CliNormalizeOptions, ConfigError, FiniToml, NormalizeSection, FINI_TOML_TEMPLATE,
 };
 pub use normalize::{
     mask_secret_lines, normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind,
@@ -21,10 +21,21 @@ pub use walker::walk_paths;
 use rayon::prelude::*;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 const BINARY_CHECK_SIZE: usize = 8192;
+
+/// Files are processed in batches of this size instead of all at once: each
+/// batch is read+normalized in parallel, then applied (output/write/stats)
+/// sequentially, before the next batch starts. This bounds peak memory to
+/// roughly `CHUNK_SIZE * avg file size` (a changed file's original and
+/// normalized content are both held until it's applied) instead of holding
+/// every changed file in the run at once. 256 keeps that bound in the low
+/// tens of MB for typical source files, while staying large enough that
+/// per-chunk overhead (rayon dispatch, the sequential apply loop) is
+/// negligible next to per-file I/O cost.
+const CHUNK_SIZE: usize = 256;
 
 /// Check if content is binary by looking for null bytes in first 8192 bytes
 pub fn is_binary(content: &[u8]) -> bool {
@@ -75,69 +86,80 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     }
     let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
-    // Process files in parallel (read + normalize), collect results
-    let outcomes: Vec<(PathBuf, FileOutcome)> = file_paths
-        .into_par_iter()
-        .map(|path| {
-            let outcome = process_file(&path, &config.normalize);
-            progress.inc();
-            (path, outcome)
-        })
-        .collect();
+    // Process files in fixed-size chunks: within a chunk, read+normalize run in
+    // parallel and are collected (rayon's par_iter().collect() over a slice
+    // preserves index order); then that chunk's results are applied (output +
+    // writes + stats) sequentially before the next chunk starts. This keeps
+    // walk order intact across chunk boundaries while bounding how much
+    // changed-file content is held in memory at once (see CHUNK_SIZE).
+    for chunk in file_paths.chunks(CHUNK_SIZE) {
+        let outcomes: Vec<(&Path, FileOutcome)> = chunk
+            .par_iter()
+            .map(|path| {
+                let outcome = process_file(path, &config.normalize);
+                progress.inc();
+                (path.as_path(), outcome)
+            })
+            .collect();
 
-    // Apply results sequentially (output + file writes + stats)
-    for (path, outcome) in &outcomes {
-        match outcome {
-            FileOutcome::Skipped { reason } => {
-                // Empty files are trivially "done"; only count skips that mean
-                // "this file was not inspected" (binary, non-UTF-8, symlink)
-                if *reason != "empty" {
-                    result.skipped += 1;
-                }
-                if ctx.verbose {
-                    output::print_skipped(path, reason, ctx);
-                }
-            }
-            FileOutcome::Clean { suppressed } => {
-                record_suppressed(path, suppressed, &mut result);
-                if ctx.verbose {
-                    output::print_checked(path, ctx);
-                }
-            }
-            FileOutcome::Changed {
-                original,
-                result: normalize_result,
-                modified,
-                len,
-            } => {
-                record_suppressed(path, &normalize_result.suppressed, &mut result);
-                let fullwidth_count = normalize_result
-                    .problems
-                    .iter()
-                    .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
-                    .count();
-                result.warnings += fullwidth_count;
-
-                if config.check_only {
-                    result.files_with_problems += 1;
-                    output::print_check_result(path, original, normalize_result, ctx);
-                } else {
-                    if normalize_result.has_changes() {
-                        if let Err(e) =
-                            write_atomic(path, &normalize_result.content, *modified, *len)
-                        {
-                            eprintln!("Error writing {}: {e}", path.display());
-                            result.errors += 1;
-                            continue;
-                        }
-                        result.files_fixed += 1;
+        for (path, outcome) in &outcomes {
+            match outcome {
+                FileOutcome::Skipped { reason } => {
+                    // Empty files are trivially "done"; only count skips that mean
+                    // "this file was not inspected" (binary, non-UTF-8, symlink)
+                    if *reason != "empty" {
+                        result.skipped += 1;
                     }
-                    output::print_fix_result(path, original, normalize_result, ctx);
+                    if ctx.verbose {
+                        output::print_skipped(path, reason, ctx);
+                    }
                 }
-            }
-            FileOutcome::Error(e) => {
-                eprintln!("Error processing {}: {e}", path.display());
-                result.errors += 1;
+                FileOutcome::Clean { suppressed } => {
+                    record_suppressed(path, suppressed, &mut result);
+                    if ctx.verbose {
+                        output::print_checked(path, ctx);
+                    }
+                }
+                FileOutcome::Changed {
+                    original,
+                    result: normalize_result,
+                    modified,
+                    len,
+                } => {
+                    record_suppressed(path, &normalize_result.suppressed, &mut result);
+                    let fullwidth_count = normalize_result
+                        .problems
+                        .iter()
+                        .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
+                        .count();
+                    result.warnings += fullwidth_count;
+
+                    if config.check_only {
+                        result.files_with_problems += 1;
+                        output::print_check_result(path, original, normalize_result, ctx);
+                    } else {
+                        if normalize_result.has_changes() {
+                            if config.should_write() {
+                                if let Err(e) =
+                                    write_atomic(path, &normalize_result.content, *modified, *len)
+                                {
+                                    eprintln!("Error writing {}: {e}", path.display());
+                                    result.errors += 1;
+                                    continue;
+                                }
+                            }
+                            // Counts files that changed whether or not they were
+                            // actually written — --diff previews without writing,
+                            // and print_summary picks the wording accordingly.
+                            result.files_fixed += 1;
+                        }
+                        output::print_fix_result(path, original, normalize_result, ctx);
+                    }
+                }
+                FileOutcome::Error(e) => {
+                    eprintln!("Error processing {}: {e}", path.display());
+                    result.errors += 1;
+                }
             }
         }
     }
@@ -310,7 +332,6 @@ mod tests {
 
     #[test]
     fn test_binary_check_within_8192_bytes() {
-        // Null byte at position 8000 (within first 8192 bytes)
         let mut content = vec![b'a'; 8000];
         content.push(0);
         content.extend(vec![b'b'; 1000]);
@@ -319,7 +340,6 @@ mod tests {
 
     #[test]
     fn test_binary_null_after_8192_bytes_not_detected() {
-        // Null byte at position 9000 (after first 8192 bytes)
         let mut content = vec![b'a'; 9000];
         content.push(0);
         content.extend(vec![b'b'; 1000]);
