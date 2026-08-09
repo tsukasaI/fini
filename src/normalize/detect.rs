@@ -98,29 +98,31 @@ fn is_valid_marker(line: &str, marker: &str) -> bool {
     false
 }
 
-fn detect_comment_markers(content: &str, marker: &str, kind: ProblemKind) -> Vec<Problem> {
-    content
-        .lines()
-        .enumerate()
-        .filter_map(|(line_idx, line)| {
-            if is_valid_marker(line, marker) {
-                Some(Problem {
-                    line: line_idx + 1,
-                    kind: kind.clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
+/// Detects TODO and FIXME markers in a single pass over `content`'s lines
+/// (each line is checked for both markers instead of scanning the file twice).
+/// Returns the two problem kinds in separate vecs, each in line order, so
+/// callers that gate TODO/FIXME detection independently can extend their
+/// combined problem list with either or both without reordering results.
+pub(super) fn detect_todo_and_fixme_comments(content: &str) -> (Vec<Problem>, Vec<Problem>) {
+    let mut todos = Vec::new();
+    let mut fixmes = Vec::new();
 
-pub(super) fn detect_todo_comments(content: &str) -> Vec<Problem> {
-    detect_comment_markers(content, "TODO", ProblemKind::TodoComment)
-}
+    for (line_idx, line) in content.lines().enumerate() {
+        if is_valid_marker(line, "TODO") {
+            todos.push(Problem {
+                line: line_idx + 1,
+                kind: ProblemKind::TodoComment,
+            });
+        }
+        if is_valid_marker(line, "FIXME") {
+            fixmes.push(Problem {
+                line: line_idx + 1,
+                kind: ProblemKind::FixmeComment,
+            });
+        }
+    }
 
-pub(super) fn detect_fixme_comments(content: &str) -> Vec<Problem> {
-    detect_comment_markers(content, "FIXME", ProblemKind::FixmeComment)
+    (todos, fixmes)
 }
 
 /// Substring search requiring a left word boundary at the match start (the preceding
@@ -251,26 +253,36 @@ mod tests {
 
     #[test]
     fn test_todo_basic() {
-        let problems = detect_todo_comments("// TODO: fix this\n");
-        assert_eq!(problems.len(), 1);
-        assert_eq!(problems[0].line, 1);
+        let (todos, _) = detect_todo_and_fixme_comments("// TODO: fix this\n");
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].line, 1);
     }
 
     #[test]
     fn test_todo_case_insensitive() {
-        assert_eq!(detect_todo_comments("// todo: fix\n").len(), 1);
-        assert_eq!(detect_todo_comments("// Todo fix\n").len(), 1);
+        assert_eq!(detect_todo_and_fixme_comments("// todo: fix\n").0.len(), 1);
+        assert_eq!(detect_todo_and_fixme_comments("// Todo fix\n").0.len(), 1);
     }
 
     #[test]
     fn test_todo_requires_word_boundary() {
-        assert!(detect_todo_comments("use todoist;\n").is_empty());
+        assert!(detect_todo_and_fixme_comments("use todoist;\n")
+            .0
+            .is_empty());
     }
 
     #[test]
     fn test_fixme_detected() {
-        let problems = detect_fixme_comments("# FIXME: broken\n");
-        assert_eq!(problems.len(), 1);
+        let (_, fixmes) = detect_todo_and_fixme_comments("# FIXME: broken\n");
+        assert_eq!(fixmes.len(), 1);
+    }
+
+    #[test]
+    fn test_todo_and_fixme_single_pass_separates_kinds() {
+        let (todos, fixmes) =
+            detect_todo_and_fixme_comments("// TODO: first\n// FIXME: second\n// TODO: third\n");
+        assert_eq!(todos.iter().map(|p| p.line).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(fixmes.iter().map(|p| p.line).collect::<Vec<_>>(), [2]);
     }
 
     #[test]

@@ -5,8 +5,7 @@ mod ignore;
 use serde::{Deserialize, Serialize};
 
 use detect::{
-    check_line_length, detect_debug_code, detect_fixme_comments, detect_secret_patterns,
-    detect_todo_comments,
+    check_line_length, detect_debug_code, detect_secret_patterns, detect_todo_and_fixme_comments,
 };
 use fix::{
     fix_fullwidth_spaces, limit_consecutive_blank_lines, normalize_eof_newline,
@@ -165,12 +164,14 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     result = normalize_eof_newline(&result);
 
     // Detection only (no auto-fix)
-    if config.detect_todos {
-        problems.extend(detect_todo_comments(&result));
-    }
-
-    if config.detect_fixmes {
-        problems.extend(detect_fixme_comments(&result));
+    if config.detect_todos || config.detect_fixmes {
+        let (todo_problems, fixme_problems) = detect_todo_and_fixme_comments(&result);
+        if config.detect_todos {
+            problems.extend(todo_problems);
+        }
+        if config.detect_fixmes {
+            problems.extend(fixme_problems);
+        }
     }
 
     if config.detect_debug {
