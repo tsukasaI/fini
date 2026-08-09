@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -204,6 +205,62 @@ fn test_multiple_files() {
 
     assert_eq!(fs::read_to_string(&file1).unwrap(), "hello\n");
     assert_eq!(fs::read_to_string(&file2).unwrap(), "world\n");
+}
+
+#[test]
+fn test_many_files_preserve_order_and_identity_across_chunks() {
+    // Regression test for the chunked-processing refactor in `run()`: files are
+    // now processed in fixed-size batches (CHUNK_SIZE in src/lib.rs) instead of
+    // all at once. Two things a batching bug could break:
+    //   1. pairing — one file's fix landing in another file (chunk-boundary mixup)
+    //   2. ordering — output no longer matches walk order across chunk boundaries
+    // Use more files than CHUNK_SIZE so the run spans multiple chunks. Passing
+    // them as explicit CLI args (rather than walking a directory) pins the input
+    // order to something this test controls and can assert against — directory
+    // walk order is filesystem-dependent and not something a test should assume.
+    let dir = TempDir::new().unwrap();
+    let file_count = 600;
+    let mut cmd = fini_cmd();
+    cmd.arg("--quiet");
+    for i in 0..file_count {
+        let path = dir.path().join(format!("file{i:04}.txt"));
+        // Missing EOF newline (needs a fix) so every file is printed and written.
+        fs::write(&path, format!("content-{i}")).unwrap();
+        cmd.arg(&path);
+    }
+
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    for i in 0..file_count {
+        let content = fs::read_to_string(dir.path().join(format!("file{i:04}.txt"))).unwrap();
+        assert_eq!(
+            content,
+            format!("content-{i}\n"),
+            "mismatch for file{i:04}.txt"
+        );
+    }
+
+    // --quiet prints exactly one line (the path) per fixed file, in apply order.
+    // Extract each file's index from its printed path and confirm the sequence
+    // is exactly 0..file_count — not just "no crash", but "order preserved".
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let indices: Vec<usize> = stdout
+        .lines()
+        .map(|line| {
+            let name = Path::new(line.trim())
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap();
+            name.strip_prefix("file").unwrap().parse().unwrap()
+        })
+        .collect();
+    let expected: Vec<usize> = (0..file_count).collect();
+    assert_eq!(
+        indices, expected,
+        "output order must match input walk order"
+    );
 }
 
 #[test]
