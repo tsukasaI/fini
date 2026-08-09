@@ -92,42 +92,50 @@ pub fn print_check_result(
     }
 
     if ctx.mode == OutputMode::Diff {
-        // Mirrors print_fix_result's Diff branch: a diff, not the textual
-        // problem list, masked the same way (issue #44's contract applies
-        // to every diff path, not just fix mode).
-        let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
-        print_diff(&path.display().to_string(), &orig, &new);
-        return;
-    }
-
-    println!(
-        "{}Error:{} {}",
-        ctx.colors.error,
-        ctx.colors.reset(),
-        path.display()
-    );
-
-    if result.has_changes() {
-        let orig_trimmed = original.trim_end_matches(['\n', '\r']);
-        let orig_trailing_newlines = original[orig_trimmed.len()..]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count();
-        let result_trimmed = result.content.trim_end_matches(['\n', '\r']);
-        let result_trailing_newlines = result.content[result_trimmed.len()..]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count();
-
-        if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
-            println!("  - missing EOF newline");
-        } else if orig_trailing_newlines > 1 && result_trailing_newlines < orig_trailing_newlines {
-            println!("  - extra trailing newline(s) removed");
+        // Mirrors print_fix_result's Diff branch: masked the same way
+        // (issue #44's contract applies to every diff path, not just fix
+        // mode). Unlike print_fix_result, we don't return early: detection-
+        // only problems (TODO/FIXME/debug/secret/long-line) never change
+        // result.content, so there's no diff to show them in — they're only
+        // visible via the problem list below, which must still run. When
+        // there IS a content diff, skip the empty `---`/`+++` header instead
+        // of printing a diff with no body.
+        if result.has_changes() {
+            let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
+            print_diff(&path.display().to_string(), &orig, &new);
         }
+    } else {
+        println!(
+            "{}Error:{} {}",
+            ctx.colors.error,
+            ctx.colors.reset(),
+            path.display()
+        );
 
-        for (i, orig_line) in original.lines().enumerate() {
-            if orig_line.len() != orig_line.trim_end().len() {
-                println!("  - trailing whitespace at line {}", i + 1);
+        if result.has_changes() {
+            let orig_trimmed = original.trim_end_matches(['\n', '\r']);
+            let orig_trailing_newlines = original[orig_trimmed.len()..]
+                .chars()
+                .filter(|&c| c == '\n')
+                .count();
+            let result_trimmed = result.content.trim_end_matches(['\n', '\r']);
+            let result_trailing_newlines = result.content[result_trimmed.len()..]
+                .chars()
+                .filter(|&c| c == '\n')
+                .count();
+
+            if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
+                println!("  - missing EOF newline");
+            } else if orig_trailing_newlines > 1
+                && result_trailing_newlines < orig_trailing_newlines
+            {
+                println!("  - extra trailing newline(s) removed");
+            }
+
+            for (i, orig_line) in original.lines().enumerate() {
+                if orig_line.len() != orig_line.trim_end().len() {
+                    println!("  - trailing whitespace at line {}", i + 1);
+                }
             }
         }
     }

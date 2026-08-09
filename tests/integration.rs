@@ -1015,6 +1015,34 @@ fn test_diff_masks_secret_lines() {
 }
 
 #[test]
+fn test_check_diff_shows_detection_only_problems() {
+    // Regression test: a file whose only problems are detection-only
+    // (secret pattern here; same applies to TODO/FIXME/debug/long-line)
+    // never changes result.content vs original, so `--check --diff` used to
+    // print an empty `---`/`+++` diff and return before ever reaching the
+    // problem list, silently dropping the secret hint (exit 1 with no
+    // indication why). The problem list must still print even when there's
+    // no content diff to show.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("secret.py");
+    fs::write(&file, "password = \"supersecret123\"\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("potential secret"),
+        "secret hint missing from --check --diff output: {stdout}"
+    );
+}
+
+#[test]
 fn test_stdin_check_diff_goes_to_stderr() {
     // Regression test for issue #38: --stdin --check --diff must keep stdout
     // clean (its contract is "normalized content only") and put the diff on
