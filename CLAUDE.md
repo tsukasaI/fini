@@ -63,6 +63,6 @@ Finally, if any problems exist, `fini:ignore` / `fini:ignore-next-line` directiv
 
 ### Testing conventions
 
-- Unit tests live inline in each module (especially extensive in `normalize/mod.rs`)
+- Unit tests live inline in each module (especially extensive in `normalize/mod.rs`), except `normalize/fix.rs`, whose transformations are covered only indirectly via `normalize_content()` tests in `mod.rs`
 - Integration tests in `tests/integration.rs` test the CLI binary end-to-end using `tempfile` for isolated directories
 - Tests are organized by feature/issue area, not a clean phase sequence — early sections carry leftover "Phase N" labels from an earlier numbering scheme (reused out of order, e.g. two unrelated "Phase 3" sections), while later sections drop phase numbers entirely in favor of issue-referenced headers (e.g. "Atomic Writes & Symlinks (issue #35)")
