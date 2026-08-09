@@ -317,7 +317,6 @@ mod tests {
 
     #[test]
     fn test_debug_print_requires_word_boundary() {
-        // "print(" must not match inside "sprint(" / "pprint(".
         assert!(detect_debug_code("sprint(x);\n", false).is_empty());
         assert!(detect_debug_code("pprint(x);\n", false).is_empty());
     }
@@ -382,7 +381,7 @@ mod tests {
     fn test_line_length_multibyte_shortcut() {
         // 6 multibyte chars = 6 char count but 18 byte length
         // byte length > limit but char count <= limit should pass
-        let line = "ああああああ\n"; // 6 chars, 18 bytes
+        let line = "ああああああ\n";
         assert!(check_line_length(line, 6).is_empty());
         assert_eq!(check_line_length(line, 5).len(), 1);
     }

@@ -107,17 +107,14 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Handle --init command
     if cli.init {
         return handle_init();
     }
 
-    // Handle --stdin command
     if cli.stdin {
         return handle_stdin(&cli);
     }
 
-    // Load configuration
     let toml_config = match load_configuration(&cli.config, cli.quiet) {
         Ok(config) => config,
         Err(e) => {
@@ -126,15 +123,12 @@ fn main() -> ExitCode {
         }
     };
 
-    // Check for editorconfig conflicts (informational warnings)
     if !cli.quiet {
         check_editorconfig_warnings();
     }
 
-    // Build CLI options for merging
     let cli_options = build_cli_options(&cli);
 
-    // Merge configurations: CLI > TOML > defaults
     let normalize =
         merge_normalize_config(&cli_options, toml_config.as_ref().map(|c| &c.normalize));
 
@@ -171,8 +165,6 @@ fn main() -> ExitCode {
         exclude_patterns,
     };
 
-    // Determine color, verbose, and progress settings
-    // --quiet overrides --verbose
     let use_colors = should_use_colors(cli.color, cli.no_color);
     let verbose = cli.verbose && !cli.quiet;
     let show_progress = !cli.quiet && !cli.no_progress && std::io::stdout().is_terminal();
@@ -216,18 +208,15 @@ fn handle_init() -> ExitCode {
 }
 
 fn handle_stdin(cli: &Cli) -> ExitCode {
-    // Read from stdin
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("Error reading stdin: {e}");
         return ExitCode::from(2);
     }
 
-    // Build normalize config
     let cli_options = build_cli_options(cli);
     let normalize = merge_normalize_config(&cli_options, None);
 
-    // Normalize content
     let result = normalize_content(&input, &normalize);
 
     // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
@@ -263,7 +252,6 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Normal mode: output normalized content to stdout
     print!("{}", result.content);
     if let Err(e) = io::stdout().flush() {
         eprintln!("Error writing stdout: {e}");

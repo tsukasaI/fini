@@ -17,7 +17,6 @@ pub struct CliNormalizeOptions {
     /// If Some(true), keep leading blanks (inverted in config)
     pub keep_leading_blanks: Option<bool>,
     pub fix_code_blocks: Option<bool>,
-    // Phase 3: Human Error Prevention
     /// If Some(true), skip TODO detection
     pub no_detect_todos: Option<bool>,
     /// If Some(true), skip FIXME detection
@@ -33,8 +32,6 @@ pub struct CliNormalizeOptions {
 }
 
 /// Merge configurations from CLI, TOML, and defaults.
-///
-/// Priority: CLI > TOML > defaults
 pub fn merge_normalize_config(
     cli: &CliNormalizeOptions,
     toml: Option<&NormalizeSection>,
@@ -60,7 +57,6 @@ pub fn merge_normalize_config(
             .fix_code_blocks
             .or_else(|| toml.and_then(|t| t.fix_code_blocks))
             .unwrap_or(defaults.fix_code_blocks),
-        // Phase 3: Human Error Prevention
         detect_todos: cli
             .no_detect_todos
             .map(|no| !no)

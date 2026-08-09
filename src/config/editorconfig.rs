@@ -30,24 +30,20 @@ pub fn parse_editorconfig(path: &Path) -> io::Result<EditorConfigSettings> {
     for line in content.lines() {
         let line = line.trim();
 
-        // Skip empty lines and comments
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
 
-        // Section header
         if line.starts_with('[') && line.ends_with(']') {
             // [*] applies to all files
             in_global_section = line == "[*]";
             continue;
         }
 
-        // Only process [*] section
         if !in_global_section {
             continue;
         }
 
-        // Parse key = value
         if let Some((key, value)) = line.split_once('=') {
             let key = key.trim().to_lowercase();
             let value = value.trim().to_lowercase();
@@ -71,8 +67,6 @@ pub fn parse_editorconfig(path: &Path) -> io::Result<EditorConfigSettings> {
 }
 
 /// Check for conflicts between .editorconfig and fini's fixed behaviors.
-///
-/// Returns a list of warning messages for conflicting settings.
 pub fn check_editorconfig_conflicts(settings: &EditorConfigSettings) -> Vec<String> {
     let mut warnings = Vec::new();
 

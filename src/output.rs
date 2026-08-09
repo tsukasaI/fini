@@ -132,7 +132,6 @@ pub fn print_check_result(
         }
     }
 
-    // Problems from normalization
     for problem in &result.problems {
         match &problem.kind {
             ProblemKind::FullWidthSpace => {
@@ -188,7 +187,6 @@ pub fn print_fix_result(
             print_diff(&path.display().to_string(), &orig, &new);
         }
         OutputMode::Normal => {
-            // Print warnings for full-width spaces
             for problem in result
                 .problems
                 .iter()

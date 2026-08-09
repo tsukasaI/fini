@@ -7,12 +7,9 @@ use std::path::{Path, PathBuf};
 
 use super::toml_schema::FiniToml;
 
-/// Error type for configuration loading
 #[derive(Debug)]
 pub enum ConfigError {
-    /// IO error reading the file
     Io(io::Error),
-    /// TOML parsing error
     Parse(toml::de::Error),
 }
 
@@ -83,7 +80,6 @@ pub fn find_config_file(start_dir: &Path) -> Option<PathBuf> {
     find_file_upward(start_dir, "fini.toml", true)
 }
 
-/// Load and parse fini.toml from the given path.
 pub fn load_config(path: &Path) -> Result<FiniToml, ConfigError> {
     let content = fs::read_to_string(path)?;
     let config: FiniToml = toml::from_str(&content)?;
@@ -122,13 +118,11 @@ mod tests {
     #[test]
     fn test_find_config_stops_at_git_root() {
         let dir = TempDir::new().unwrap();
-        // Create .git directory to mark git root
         fs::create_dir(dir.path().join(".git")).unwrap();
 
         let subdir = dir.path().join("subdir");
         fs::create_dir(&subdir).unwrap();
 
-        // No config in this tree
         let found = find_config_file(&subdir);
         assert_eq!(found, None);
     }

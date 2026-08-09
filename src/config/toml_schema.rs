@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FiniToml {
-    /// Normalization settings
     #[serde(default)]
     pub normalize: NormalizeSection,
 

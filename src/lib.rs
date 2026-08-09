@@ -102,7 +102,6 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
             })
             .collect();
 
-        // Apply results sequentially (output + file writes + stats)
         for (path, outcome) in &outcomes {
             match outcome {
                 FileOutcome::Skipped { reason } => {
@@ -333,7 +332,6 @@ mod tests {
 
     #[test]
     fn test_binary_check_within_8192_bytes() {
-        // Null byte at position 8000 (within first 8192 bytes)
         let mut content = vec![b'a'; 8000];
         content.push(0);
         content.extend(vec![b'b'; 1000]);
@@ -342,7 +340,6 @@ mod tests {
 
     #[test]
     fn test_binary_null_after_8192_bytes_not_detected() {
-        // Null byte at position 9000 (after first 8192 bytes)
         let mut content = vec![b'a'; 9000];
         content.push(0);
         content.extend(vec![b'b'; 1000]);

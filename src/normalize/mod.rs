@@ -13,28 +13,22 @@ use fix::{
     remove_trailing_whitespace, remove_zero_width_chars,
 };
 
-/// Configuration for normalization rules
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizeConfig {
-    /// Maximum consecutive blank lines (None = no limit)
+    /// None = no limit
     pub max_blank_lines: Option<usize>,
-    /// Remove zero-width characters (default: true)
     pub remove_zero_width: bool,
-    /// Remove leading blank lines (default: true)
     pub remove_leading_blanks: bool,
-    /// Remove code block remnants (default: false)
     pub fix_code_blocks: bool,
-    /// Detect TODO comments (default: true)
     pub detect_todos: bool,
-    /// Detect FIXME comments (default: true)
     pub detect_fixmes: bool,
-    /// Detect debug code like console.log, print() (default: true)
+    /// Includes patterns like console.log, print()
     pub detect_debug: bool,
-    /// Include console.error in debug detection (default: false)
+    /// Also flags console.error, which is excluded by default
     pub strict_debug: bool,
-    /// Detect secret patterns like API keys (default: true)
+    /// Detects patterns like API keys
     pub detect_secrets: bool,
-    /// Maximum line length (None = disabled)
+    /// None = disabled
     pub max_line_length: Option<usize>,
 }
 
@@ -96,7 +90,6 @@ pub enum ProblemKind {
 }
 
 impl ProblemKind {
-    /// Returns true if this is a detection-only problem (not auto-fixed)
     pub fn is_detection_only(&self) -> bool {
         matches!(
             self,
@@ -125,7 +118,6 @@ impl ProblemKind {
     }
 }
 
-/// Normalize file content according to fini rules
 pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeResult {
     let mut result = content.to_string();
     let mut problems = vec![];
@@ -163,7 +155,6 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     result = remove_trailing_whitespace(&result);
     result = normalize_eof_newline(&result);
 
-    // Detection only (no auto-fix)
     if config.detect_todos || config.detect_fixmes {
         let (todo_problems, fixme_problems) = detect_todo_and_fixme_comments(&result);
         if config.detect_todos {
@@ -186,8 +177,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         problems.extend(check_line_length(&result, max_length));
     }
 
-    // Filter out problems suppressed by inline ignore directives, keeping
-    // the suppressed ones so they stay auditable (issue #46)
+    // Partition (not filter) so suppressed problems stay auditable (issue #46)
     let mut suppressed = vec![];
     if !problems.is_empty() {
         let ignore_map = ignore::parse_ignore_directives(&result);
@@ -219,10 +209,6 @@ pub fn mask_secret_lines(content: &str) -> String {
 mod tests {
     use super::*;
 
-    // ===========================================
-    // Suppression audit trail (issue #46)
-    // ===========================================
-
     #[test]
     fn test_ignored_problems_recorded_as_suppressed() {
         let input = "password = \"supersecret123\" # fini:ignore secret\n";
@@ -245,10 +231,6 @@ mod tests {
         assert!(result.suppressed.is_empty());
         assert_eq!(result.problems.len(), 1);
     }
-
-    // ===========================================
-    // EOF Newline Normalization
-    // ===========================================
 
     #[test]
     fn test_add_eof_newline_when_missing() {
@@ -278,10 +260,6 @@ mod tests {
         assert_eq!(result.content, "line1\nline2\n");
     }
 
-    // ===========================================
-    // Line Ending Normalization
-    // ===========================================
-
     #[test]
     fn test_crlf_to_lf() {
         let input = "line1\r\nline2\r\n";
@@ -309,10 +287,6 @@ mod tests {
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "line1\nline2\n");
     }
-
-    // ===========================================
-    // Trailing Whitespace Removal
-    // ===========================================
 
     #[test]
     fn test_remove_trailing_spaces() {
@@ -348,10 +322,6 @@ mod tests {
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "hello\nworld\n");
     }
-
-    // ===========================================
-    // Full-width Space Detection/Fix
-    // ===========================================
 
     #[test]
     fn test_detect_fullwidth_space() {
@@ -397,10 +367,6 @@ mod tests {
         );
     }
 
-    // ===========================================
-    // has_changes()
-    // ===========================================
-
     #[test]
     fn test_has_changes_when_content_modified() {
         let input = "hello";
@@ -421,10 +387,6 @@ mod tests {
         let result = normalize_content(input, &NormalizeConfig::default());
         assert!(result.has_changes());
     }
-
-    // ===========================================
-    // Leading Blank Lines Removal
-    // ===========================================
 
     #[test]
     fn test_remove_leading_blank_lines() {
@@ -471,10 +433,6 @@ mod tests {
             assert_eq!(count, 3);
         }
     }
-
-    // ===========================================
-    // Zero-width Character Removal
-    // ===========================================
 
     #[test]
     fn test_remove_zwsp() {
@@ -548,10 +506,6 @@ mod tests {
             2
         );
     }
-
-    // ===========================================
-    // Consecutive Blank Line Limit
-    // ===========================================
 
     #[test]
     fn test_limit_blank_lines_to_2() {
@@ -642,10 +596,6 @@ mod tests {
         );
     }
 
-    // ===========================================
-    // Code Block Remnant Removal
-    // ===========================================
-
     #[test]
     fn test_remove_code_fence_opening() {
         let config = NormalizeConfig {
@@ -728,10 +678,6 @@ mod tests {
         }
     }
 
-    // ===========================================
-    // Edge Cases: Leading Blank Lines
-    // ===========================================
-
     #[test]
     fn test_file_with_only_blank_lines() {
         let input = "\n\n\n";
@@ -753,10 +699,6 @@ mod tests {
         assert_eq!(result.content, "");
         assert!(!result.has_changes());
     }
-
-    // ===========================================
-    // Edge Cases: Zero-width Characters
-    // ===========================================
 
     #[test]
     fn test_zero_width_at_start_of_line() {
@@ -794,10 +736,6 @@ mod tests {
         );
     }
 
-    // ===========================================
-    // Edge Cases: Consecutive Blank Lines
-    // ===========================================
-
     #[test]
     fn test_blank_lines_at_end_of_file() {
         let config = NormalizeConfig {
@@ -832,10 +770,6 @@ mod tests {
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "a\n\nb\n");
     }
-
-    // ===========================================
-    // Edge Cases: Code Block Remnants
-    // ===========================================
 
     #[test]
     fn test_indented_code_fence() {
@@ -880,10 +814,6 @@ mod tests {
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "````rust\ncode\n");
     }
-
-    // ===========================================
-    // Edge Cases: Combined Features
-    // ===========================================
 
     #[test]
     fn test_all_features_combined() {
@@ -978,10 +908,6 @@ mod tests {
         assert_eq!(result.content, "code\n");
     }
 
-    // ===========================================
-    // Long Line Detection
-    // ===========================================
-
     #[test]
     fn test_detect_line_over_default_limit() {
         let config = NormalizeConfig {
@@ -1064,10 +990,6 @@ mod tests {
         assert!(problem.is_none());
     }
 
-    // ===========================================
-    // TODO/FIXME Detection
-    // ===========================================
-
     #[test]
     fn test_detect_todo_in_single_line_comment() {
         let input = "// TODO: fix this later\n";
@@ -1147,10 +1069,6 @@ mod tests {
         assert!(problem.is_none());
     }
 
-    // ===========================================
-    // Debug Code Detection
-    // ===========================================
-
     #[test]
     fn test_detect_console_log() {
         let input = "console.log('debug');\n";
@@ -1206,10 +1124,6 @@ mod tests {
         assert!(problem.is_none());
     }
 
-    // ===========================================
-    // Secret Pattern Detection
-    // ===========================================
-
     #[test]
     fn test_detect_api_key_pattern() {
         let input = "const API_KEY = \"sk_live_abcd1234\";\n";
@@ -1246,8 +1160,6 @@ mod tests {
             .find(|p| matches!(p.kind, ProblemKind::SecretPattern { .. }));
         assert!(problem.is_none());
     }
-
-    // ── Inline ignore directives ──
 
     #[test]
     fn test_ignore_inline_suppresses_todo() {
