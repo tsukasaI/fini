@@ -211,4 +211,25 @@ fix_code_blocks = true
         let result = load_config(&config_path);
         assert!(matches!(result, Err(ConfigError::Parse(_))));
     }
+
+    #[test]
+    fn test_load_config_rejects_unknown_top_level_key() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("fini.toml");
+        fs::write(&config_path, "not_a_real_key = true\n").unwrap();
+
+        let result = load_config(&config_path);
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
+    }
+
+    #[test]
+    fn test_load_config_rejects_unknown_normalize_key() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("fini.toml");
+        // Typo'd key must be rejected, not silently ignored.
+        fs::write(&config_path, "[normalize]\nmax_blank_line = 2\n").unwrap();
+
+        let result = load_config(&config_path);
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
+    }
 }

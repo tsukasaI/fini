@@ -118,7 +118,13 @@ fn main() -> ExitCode {
     }
 
     // Load configuration
-    let toml_config = load_configuration(&cli.config, cli.quiet);
+    let toml_config = match load_configuration(&cli.config, cli.quiet) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::from(2);
+        }
+    };
 
     // Check for editorconfig conflicts (informational warnings)
     if !cli.quiet {
@@ -273,25 +279,37 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_configuration(explicit_path: &Option<PathBuf>, quiet: bool) -> Option<FiniToml> {
+/// Load fini.toml, if one applies.
+///
+/// `Ok(None)` means no config file was found (explicit `--config` unset, and
+/// none discovered upward) - defaults apply silently, as documented. Once a
+/// path is resolved (explicit or discovered), that file existing but failing
+/// to load - I/O error or TOML parse error, including a `deny_unknown_fields`
+/// rejection - is a hard failure: a typo'd key must never silently fall back
+/// to defaults (see README's exit-code table).
+fn load_configuration(
+    explicit_path: &Option<PathBuf>,
+    quiet: bool,
+) -> Result<Option<FiniToml>, String> {
     let config_path = explicit_path.clone().or_else(|| {
         std::env::current_dir()
             .ok()
             .and_then(|d| find_config_file(&d))
     });
 
-    config_path.and_then(|p| match load_config(&p) {
+    let Some(p) = config_path else {
+        return Ok(None);
+    };
+
+    match load_config(&p) {
         Ok(config) => {
             if !quiet {
                 eprintln!("Using config: {}", p.display());
             }
-            Some(config)
+            Ok(Some(config))
         }
-        Err(e) => {
-            eprintln!("Warning: Failed to load {}: {}", p.display(), e);
-            None
-        }
-    })
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    }
 }
 
 fn check_editorconfig_warnings() {

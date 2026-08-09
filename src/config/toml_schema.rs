@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Root structure for fini.toml
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FiniToml {
     /// Normalization settings
     #[serde(default)]
@@ -16,6 +17,7 @@ pub struct FiniToml {
 
 /// `[normalize]` section in fini.toml
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NormalizeSection {
     /// Maximum consecutive blank lines (None = no limit)
     pub max_blank_lines: Option<usize>,

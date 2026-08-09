@@ -429,6 +429,71 @@ fix_code_blocks = true
     );
 }
 
+#[test]
+fn test_invalid_config_toml_exits_2() {
+    // A syntactically invalid fini.toml must be a hard failure (exit 2), not
+    // a warning that silently falls back to defaults.
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("fini.toml");
+    fs::write(&config_path, "invalid toml {{{\n").unwrap();
+
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_config_unknown_key_exits_2() {
+    // A typo'd key (e.g. max_blank_line instead of max_blank_lines) must be
+    // rejected outright, not silently ignored while the rest of the config
+    // (or defaults) apply.
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("fini.toml");
+    fs::write(&config_path, "[normalize]\nmax_blank_line = 2\n").unwrap();
+
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_explicit_config_path_missing_exits_2() {
+    // An explicit --config pointing at a nonexistent file is also a hard
+    // failure, not a silent fallback to defaults.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--config")
+        .arg(dir.path().join("does-not-exist.toml").to_str().unwrap())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error"), "stderr: {stderr}");
+}
+
 // ===========================================
 // Phase 3: Human Error Prevention Tests
 // ===========================================
