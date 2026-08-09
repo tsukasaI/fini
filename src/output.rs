@@ -19,6 +19,17 @@ pub struct Config {
     pub exclude_patterns: Vec<String>,
 }
 
+impl Config {
+    /// Whether normalized content should actually be written to disk.
+    /// Check mode never writes (`check_only` also gates the exit-code check
+    /// in main.rs and keeps that meaning); `--diff` alone is a preview per
+    /// the README ("Preview changes") and must not write either.
+    #[must_use]
+    pub fn should_write(&self) -> bool {
+        !self.check_only && self.output_mode != OutputMode::Diff
+    }
+}
+
 pub struct OutputContext {
     pub mode: OutputMode,
     pub colors: Colors,
@@ -77,6 +88,15 @@ pub fn print_check_result(
 ) {
     if ctx.mode == OutputMode::Quiet {
         println!("{}", path.display());
+        return;
+    }
+
+    if ctx.mode == OutputMode::Diff {
+        // Mirrors print_fix_result's Diff branch: a diff, not the textual
+        // problem list, masked the same way (issue #44's contract applies
+        // to every diff path, not just fix mode).
+        let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
+        print_diff(&path.display().to_string(), &orig, &new);
         return;
     }
 
@@ -288,10 +308,18 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
         }
     } else {
         if result.files_fixed > 0 {
+            // Bare --diff previews changes without writing them (README:
+            // "Preview changes"), so the count is what *would* be fixed.
+            let label = if config.should_write() {
+                "files fixed"
+            } else {
+                "files would be fixed"
+            };
             parts.push(format!(
-                "{}{} files fixed{}",
+                "{}{} {}{}",
                 ctx.colors.success,
                 result.files_fixed,
+                label,
                 ctx.colors.reset()
             ));
         }

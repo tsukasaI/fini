@@ -998,6 +998,43 @@ fn test_stdin_check_diff_goes_to_stderr() {
     );
 }
 
+#[test]
+fn test_diff_mode_previews_without_writing() {
+    // Regression test: README documents `fini --diff .` as "Preview changes",
+    // but bare --diff used to write the normalized content to disk anyway
+    // (only --check --diff skipped the write). --diff alone must be a
+    // read-only preview: print a diff, leave the file untouched, exit 0.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap(); // missing EOF newline
+
+    let before_content = fs::read(&file).unwrap();
+    let before_mtime = fs::metadata(&file).unwrap().modified().unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("---"), "missing diff header: {stdout}");
+    assert!(stdout.contains("+++"), "missing diff header: {stdout}");
+
+    let after_content = fs::read(&file).unwrap();
+    let after_mtime = fs::metadata(&file).unwrap().modified().unwrap();
+    assert_eq!(
+        before_content, after_content,
+        "--diff must not modify file content"
+    );
+    assert_eq!(
+        before_mtime, after_mtime,
+        "--diff must not touch the file (mtime changed)"
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
 // ===========================================
 // Secret Detection Trust Boundary & Audit Trail (issues #45, #46)
 // ===========================================

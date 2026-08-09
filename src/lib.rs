@@ -123,13 +123,18 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
                     output::print_check_result(path, original, normalize_result, ctx);
                 } else {
                     if normalize_result.has_changes() {
-                        if let Err(e) =
-                            write_atomic(path, &normalize_result.content, *modified, *len)
-                        {
-                            eprintln!("Error writing {}: {e}", path.display());
-                            result.errors += 1;
-                            continue;
+                        if config.should_write() {
+                            if let Err(e) =
+                                write_atomic(path, &normalize_result.content, *modified, *len)
+                            {
+                                eprintln!("Error writing {}: {e}", path.display());
+                                result.errors += 1;
+                                continue;
+                            }
                         }
+                        // Counts files that changed whether or not they were
+                        // actually written — --diff previews without writing,
+                        // and print_summary picks the wording accordingly.
                         result.files_fixed += 1;
                     }
                     output::print_fix_result(path, original, normalize_result, ctx);
