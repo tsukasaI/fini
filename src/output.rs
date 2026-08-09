@@ -88,11 +88,24 @@ pub fn print_check_result(
     );
 
     if result.has_changes() {
-        if !original.ends_with('\n') && result.content.ends_with('\n') {
+        let orig_trimmed = original.trim_end_matches(['\n', '\r']);
+        let orig_trailing_newlines = original[orig_trimmed.len()..]
+            .chars()
+            .filter(|&c| c == '\n')
+            .count();
+        let result_trimmed = result.content.trim_end_matches(['\n', '\r']);
+        let result_trailing_newlines = result.content[result_trimmed.len()..]
+            .chars()
+            .filter(|&c| c == '\n')
+            .count();
+
+        if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
             println!("  - missing EOF newline");
+        } else if orig_trailing_newlines > 1 && result_trailing_newlines < orig_trailing_newlines {
+            println!("  - extra trailing newline(s) removed");
         }
 
-        for (i, (orig_line, _)) in original.lines().zip(result.content.lines()).enumerate() {
+        for (i, orig_line) in original.lines().enumerate() {
             if orig_line.len() != orig_line.trim_end().len() {
                 println!("  - trailing whitespace at line {}", i + 1);
             }

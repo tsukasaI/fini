@@ -658,6 +658,27 @@ fn test_exit_code_1_on_check_mode_problems() {
 }
 
 #[test]
+fn test_check_mode_reports_extra_trailing_newlines_with_crlf() {
+    // Regression test: trailing-newline counting must not undercount CRLF
+    // line endings (each "\r\n" is one newline, not zero).
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "X\r\n\r\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("extra trailing newline(s) removed"),
+        "expected extra trailing newline(s) removed message, got: {stdout}"
+    );
+}
+
+#[test]
 fn test_exit_code_2_on_invalid_exclude_pattern() {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("test.txt");
