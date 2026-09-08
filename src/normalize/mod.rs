@@ -124,31 +124,44 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
 
     result = normalize_line_endings(&result);
 
+    // Maps each line of `result` (0-indexed) to its original file line number
+    // (1-indexed). Fixes that drop or reorder lines update this map so every
+    // problem — from fixes and from detections that run later on the fully
+    // normalized content — reports the line the user actually has open,
+    // rather than a post-fix line number (issue #76).
+    let mut line_map: Vec<usize> = (1..=result.lines().count()).collect();
+
     if config.remove_zero_width {
-        let (fixed, zw_problems) = remove_zero_width_chars(&result);
+        let (fixed, zw_problems) = remove_zero_width_chars(&result, &line_map);
         result = fixed;
         problems.extend(zw_problems);
     }
 
     if config.fix_code_blocks {
-        let (fixed, code_block_problems) = remove_code_block_remnants(&result);
+        let (fixed, new_line_map, code_block_problems) =
+            remove_code_block_remnants(&result, &line_map);
         result = fixed;
+        line_map = new_line_map;
         problems.extend(code_block_problems);
     }
 
     if config.remove_leading_blanks {
-        let (fixed, leading_problems) = remove_leading_blank_lines(&result);
+        let (fixed, new_line_map, leading_problems) =
+            remove_leading_blank_lines(&result, &line_map);
         result = fixed;
+        line_map = new_line_map;
         problems.extend(leading_problems);
     }
 
     if let Some(max) = config.max_blank_lines {
-        let (fixed, blank_problems) = limit_consecutive_blank_lines(&result, max);
+        let (fixed, new_line_map, blank_problems) =
+            limit_consecutive_blank_lines(&result, max, &line_map);
         result = fixed;
+        line_map = new_line_map;
         problems.extend(blank_problems);
     }
 
-    let (fixed, fullwidth_problems) = fix_fullwidth_spaces(&result);
+    let (fixed, fullwidth_problems) = fix_fullwidth_spaces(&result, &line_map);
     result = fixed;
     problems.extend(fullwidth_problems);
 
@@ -156,7 +169,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     result = normalize_eof_newline(&result);
 
     if config.detect_todos || config.detect_fixmes {
-        let (todo_problems, fixme_problems) = detect_todo_and_fixme_comments(&result);
+        let (todo_problems, fixme_problems) = detect_todo_and_fixme_comments(&result, &line_map);
         if config.detect_todos {
             problems.extend(todo_problems);
         }
@@ -166,21 +179,21 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     }
 
     if config.detect_debug {
-        problems.extend(detect_debug_code(&result, config.strict_debug));
+        problems.extend(detect_debug_code(&result, config.strict_debug, &line_map));
     }
 
     if config.detect_secrets {
-        problems.extend(detect_secret_patterns(&result));
+        problems.extend(detect_secret_patterns(&result, &line_map));
     }
 
     if let Some(max_length) = config.max_line_length {
-        problems.extend(check_line_length(&result, max_length));
+        problems.extend(check_line_length(&result, max_length, &line_map));
     }
 
     // Partition (not filter) so suppressed problems stay auditable (issue #46)
     let mut suppressed = vec![];
     if !problems.is_empty() {
-        let ignore_map = ignore::parse_ignore_directives(&result);
+        let ignore_map = ignore::parse_ignore_directives(&result, &line_map);
         if !ignore_map.is_empty() {
             let (sup, kept): (Vec<_>, Vec<_>) = problems
                 .into_iter()
@@ -1210,5 +1223,41 @@ mod tests {
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.problems.len(), 1);
         assert!(matches!(result.problems[0].kind, ProblemKind::TodoComment));
+    }
+
+    #[test]
+    fn test_detection_line_number_reports_original_line_after_leading_blanks_removed() {
+        // Regression test for issue #76: detections run on the post-fix
+        // content, but --check never writes, so the reported line must match
+        // the original file the user has open, not the shifted content.
+        let input = "\n\n\n// TODO: fix this\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        let problem = result
+            .problems
+            .iter()
+            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
+        assert!(problem.is_some());
+        assert_eq!(problem.unwrap().line, 4);
+    }
+
+    #[test]
+    fn test_detection_line_number_reports_original_line_after_code_block_and_blank_shift() {
+        // Combines two line-shifting fixes (code block remnant removal, then
+        // blank-line limiting) ahead of a detection, to make sure line-map
+        // updates compose correctly across fix stages (issue #76).
+        let config = NormalizeConfig {
+            fix_code_blocks: true,
+            max_blank_lines: Some(0),
+            ..NormalizeConfig::default()
+        };
+        // original lines: 1 ```rust  2 fn main() {}  3 (blank)  4 (blank)  5 // TODO: fix
+        let input = "```rust\nfn main() {}\n\n\n// TODO: fix\n";
+        let result = normalize_content(input, &config);
+        let problem = result
+            .problems
+            .iter()
+            .find(|p| matches!(p.kind, ProblemKind::TodoComment));
+        assert!(problem.is_some());
+        assert_eq!(problem.unwrap().line, 5);
     }
 }

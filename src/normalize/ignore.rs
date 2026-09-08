@@ -41,18 +41,26 @@ impl IgnoreMap {
     }
 }
 
-pub(super) fn parse_ignore_directives(content: &str) -> IgnoreMap {
+/// `line_map[i]` gives the original file line number for line `i` (0-indexed)
+/// of `content`, mirroring the same map threaded through the fix pipeline —
+/// `Problem.line` is remapped to original line numbers by the time this runs,
+/// so directives must key on original line numbers too (issue #76).
+pub(super) fn parse_ignore_directives(content: &str, line_map: &[usize]) -> IgnoreMap {
     let mut map = IgnoreMap {
         ignores: HashMap::new(),
     };
 
     for (idx, line) in content.lines().enumerate() {
-        let line_num = idx + 1;
+        let line_num = line_map[idx];
+        // Best-effort original line number for the line right after this one;
+        // if there's no such line (directive on the last line of the file),
+        // this key won't match any real problem.
+        let next_line_num = line_map.get(idx + 1).copied().unwrap_or(line_num + 1);
 
         if let Some(pos) = line.find(NEXT_LINE_DIRECTIVE) {
             map.insert(line_num, None);
             let kinds = parse_kind_list(line, pos + NEXT_LINE_DIRECTIVE.len());
-            map.insert(line_num + 1, kinds);
+            map.insert(next_line_num, kinds);
         } else if let Some(pos) = line.find(DIRECTIVE) {
             let kinds = parse_kind_list(line, pos + DIRECTIVE.len());
             map.insert(line_num, kinds);
@@ -95,10 +103,14 @@ fn parse_kind_list(line: &str, offset: usize) -> Option<HashSet<String>> {
 mod tests {
     use super::*;
 
+    fn identity_map(content: &str) -> Vec<usize> {
+        (1..=content.lines().count()).collect()
+    }
+
     #[test]
     fn ignore_all_same_line() {
         let content = "// TODO: fix this fini:ignore\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         assert!(map.is_ignored(1, &ProblemKind::DebugCode { pattern: "print(" }));
     }
@@ -106,7 +118,7 @@ mod tests {
     #[test]
     fn ignore_selective_same_line() {
         let content = "console.log('x'); // TODO: fix fini:ignore debug\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(
             1,
             &ProblemKind::DebugCode {
@@ -119,7 +131,7 @@ mod tests {
     #[test]
     fn ignore_multiple_kinds() {
         let content = "// fini:ignore todo,debug,secret\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         assert!(map.is_ignored(1, &ProblemKind::DebugCode { pattern: "dbg!(" }));
         assert!(map.is_ignored(1, &ProblemKind::SecretPattern { hint: "key" }));
@@ -129,7 +141,7 @@ mod tests {
     #[test]
     fn ignore_kinds_with_spaces() {
         let content = "// fini:ignore todo , debug\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         assert!(map.is_ignored(1, &ProblemKind::DebugCode { pattern: "print(" }));
     }
@@ -137,7 +149,7 @@ mod tests {
     #[test]
     fn ignore_next_line_all() {
         let content = "// fini:ignore-next-line\n// TODO: fix this\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         assert!(map.is_ignored(2, &ProblemKind::TodoComment));
         assert!(map.is_ignored(2, &ProblemKind::DebugCode { pattern: "dbg!(" }));
@@ -146,7 +158,7 @@ mod tests {
     #[test]
     fn ignore_next_line_selective() {
         let content = "# fini:ignore-next-line debug,secret\nprint('hello')\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(2, &ProblemKind::DebugCode { pattern: "print(" }));
         assert!(map.is_ignored(2, &ProblemKind::SecretPattern { hint: "key" }));
         assert!(!map.is_ignored(2, &ProblemKind::TodoComment));
@@ -155,28 +167,28 @@ mod tests {
     #[test]
     fn hash_comment_style() {
         let content = "# TODO: something fini:ignore\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
     }
 
     #[test]
     fn block_comment_style() {
         let content = "/* TODO: something fini:ignore */\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
     }
 
     #[test]
     fn html_comment_style() {
         let content = "<!-- TODO: something fini:ignore -->\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
     }
 
     #[test]
     fn block_comment_selective() {
         let content = "/* fini:ignore todo */\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         assert!(!map.is_ignored(1, &ProblemKind::FixmeComment));
     }
@@ -184,21 +196,21 @@ mod tests {
     #[test]
     fn directive_line_self_suppresses() {
         let content = "// fini:ignore-next-line todo\nsome code\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
     }
 
     #[test]
     fn unknown_kind_silently_ignored() {
         let content = "// fini:ignore unknown,todo\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
     }
 
     #[test]
     fn ignore_next_line_at_end_of_file() {
         let content = "// fini:ignore-next-line\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         // Should not panic; directive line self-suppresses
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         // Line 2 entry exists but is harmless — no problems will reference it
@@ -208,7 +220,7 @@ mod tests {
     #[test]
     fn multiple_directives_merge() {
         let content = "// fini:ignore-next-line todo\n// FIXME: broken fini:ignore fixme\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(2, &ProblemKind::TodoComment));
         assert!(map.is_ignored(2, &ProblemKind::FixmeComment));
         assert!(!map.is_ignored(2, &ProblemKind::DebugCode { pattern: "print(" }));
@@ -217,7 +229,7 @@ mod tests {
     #[test]
     fn ignore_all_wins_over_selective() {
         let content = "// fini:ignore-next-line\n// TODO: fix fini:ignore todo\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(2, &ProblemKind::TodoComment));
         assert!(map.is_ignored(2, &ProblemKind::DebugCode { pattern: "print(" }));
     }
@@ -225,7 +237,7 @@ mod tests {
     #[test]
     fn no_directives_returns_empty() {
         let content = "// just a comment\nfn main() {}\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_empty());
     }
 
@@ -233,7 +245,7 @@ mod tests {
     fn line_length_ignore() {
         let content =
             "let x = \"a very long string that exceeds the limit\"; // fini:ignore line-length\n";
-        let map = parse_ignore_directives(content);
+        let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(
             1,
             &ProblemKind::LongLine {

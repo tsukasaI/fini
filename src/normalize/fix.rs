@@ -16,7 +16,7 @@ pub(super) fn normalize_line_endings(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-pub(super) fn fix_fullwidth_spaces(content: &str) -> (String, Vec<Problem>) {
+pub(super) fn fix_fullwidth_spaces(content: &str, line_map: &[usize]) -> (String, Vec<Problem>) {
     let problems: Vec<Problem> = content
         .lines()
         .enumerate()
@@ -24,7 +24,7 @@ pub(super) fn fix_fullwidth_spaces(content: &str) -> (String, Vec<Problem>) {
             let count = line.chars().filter(|&c| c == FULLWIDTH_SPACE).count();
             std::iter::repeat_n(
                 Problem {
-                    line: line_idx + 1,
+                    line: line_map[line_idx],
                     kind: ProblemKind::FullWidthSpace,
                 },
                 count,
@@ -52,7 +52,15 @@ pub(super) fn normalize_eof_newline(content: &str) -> String {
     format!("{trimmed}\n")
 }
 
-pub(super) fn remove_leading_blank_lines(content: &str) -> (String, Vec<Problem>) {
+/// `line_map[i]` gives the original file line number for line `i` (0-indexed)
+/// of `content`. Fixes that drop or reorder lines return an updated map
+/// alongside their result so downstream problems (from later fixes or
+/// detections) can report the real line the user has open, not the
+/// post-fix line (issue #76).
+pub(super) fn remove_leading_blank_lines(
+    content: &str,
+    line_map: &[usize],
+) -> (String, Vec<usize>, Vec<Problem>) {
     let lines: Vec<&str> = content.lines().collect();
     let first_non_blank = lines
         .iter()
@@ -61,7 +69,7 @@ pub(super) fn remove_leading_blank_lines(content: &str) -> (String, Vec<Problem>
 
     let problems = if first_non_blank > 0 {
         vec![Problem {
-            line: 1,
+            line: line_map[0],
             kind: ProblemKind::LeadingBlankLines {
                 count: first_non_blank,
             },
@@ -73,13 +81,19 @@ pub(super) fn remove_leading_blank_lines(content: &str) -> (String, Vec<Problem>
     let result = lines
         .get(first_non_blank..)
         .map_or(String::new(), |rest| rest.join("\n"));
+    let new_line_map = line_map[first_non_blank.min(line_map.len())..].to_vec();
 
-    (result, problems)
+    (result, new_line_map, problems)
 }
 
-pub(super) fn limit_consecutive_blank_lines(content: &str, max: usize) -> (String, Vec<Problem>) {
+pub(super) fn limit_consecutive_blank_lines(
+    content: &str,
+    max: usize,
+    line_map: &[usize],
+) -> (String, Vec<usize>, Vec<Problem>) {
     let mut problems = vec![];
     let mut result_lines = vec![];
+    let mut new_line_map = vec![];
     let mut blank_count = 0;
     let mut problem_start_line = 0;
 
@@ -88,8 +102,9 @@ pub(super) fn limit_consecutive_blank_lines(content: &str, max: usize) -> (Strin
             blank_count += 1;
             if blank_count <= max {
                 result_lines.push(line);
+                new_line_map.push(line_map[line_idx]);
             } else if blank_count == max + 1 {
-                problem_start_line = line_idx + 1;
+                problem_start_line = line_map[line_idx];
             }
         } else {
             if blank_count > max {
@@ -103,6 +118,7 @@ pub(super) fn limit_consecutive_blank_lines(content: &str, max: usize) -> (Strin
             }
             blank_count = 0;
             result_lines.push(line);
+            new_line_map.push(line_map[line_idx]);
         }
     }
 
@@ -116,12 +132,16 @@ pub(super) fn limit_consecutive_blank_lines(content: &str, max: usize) -> (Strin
         });
     }
 
-    (result_lines.join("\n"), problems)
+    (result_lines.join("\n"), new_line_map, problems)
 }
 
-pub(super) fn remove_code_block_remnants(content: &str) -> (String, Vec<Problem>) {
+pub(super) fn remove_code_block_remnants(
+    content: &str,
+    line_map: &[usize],
+) -> (String, Vec<usize>, Vec<Problem>) {
     let mut problems = vec![];
     let mut result_lines = vec![];
+    let mut new_line_map = vec![];
 
     for (line_idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -134,7 +154,7 @@ pub(super) fn remove_code_block_remnants(content: &str) -> (String, Vec<Problem>
 
             if is_valid_fence {
                 problems.push(Problem {
-                    line: line_idx + 1,
+                    line: line_map[line_idx],
                     kind: ProblemKind::CodeBlockRemnant,
                 });
                 continue;
@@ -142,12 +162,13 @@ pub(super) fn remove_code_block_remnants(content: &str) -> (String, Vec<Problem>
         }
 
         result_lines.push(line);
+        new_line_map.push(line_map[line_idx]);
     }
 
-    (result_lines.join("\n"), problems)
+    (result_lines.join("\n"), new_line_map, problems)
 }
 
-pub(super) fn remove_zero_width_chars(content: &str) -> (String, Vec<Problem>) {
+pub(super) fn remove_zero_width_chars(content: &str, line_map: &[usize]) -> (String, Vec<Problem>) {
     let mut problems = vec![];
     let mut result = String::with_capacity(content.len());
     let mut char_idx = 0;
@@ -159,7 +180,7 @@ pub(super) fn remove_zero_width_chars(content: &str) -> (String, Vec<Problem>) {
 
             if is_zero_width && !is_bom_at_start {
                 problems.push(Problem {
-                    line: line_idx + 1,
+                    line: line_map[line_idx],
                     kind: ProblemKind::ZeroWidthCharacter,
                 });
             } else {
