@@ -17,6 +17,15 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # These behaviors are always enabled. The settings below control
 # optional features - uncomment and modify as needed.
 
+# Exclude files matching these patterns (gitignore-style globs).
+# CLI --exclude flags override this list.
+# exclude = [
+#     "vendor/",
+#     "node_modules/",
+#     "*.min.js",
+#     "*.min.css",
+# ]
+
 [normalize]
 # Maximum consecutive blank lines allowed.
 # Set to 0 to remove all blank lines, or comment out for no limit.
@@ -36,14 +45,28 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # Default: false
 # fix_code_blocks = false
 
-# Exclude files matching these patterns (gitignore-style globs).
-# CLI --exclude flags override this list.
-# exclude = [
-#     "vendor/",
-#     "node_modules/",
-#     "*.min.js",
-#     "*.min.css",
-# ]
+# Detect TODO comments.
+# Default: true
+# detect_todos = true
+
+# Detect FIXME comments.
+# Default: true
+# detect_fixmes = true
+
+# Detect debug code (console.log, print, dbg!, etc.).
+# Default: true
+# detect_debug = true
+
+# Include console.error/eprintln in debug code detection.
+# Default: false
+# strict_debug = false
+
+# Detect secret patterns (API keys, tokens, etc.).
+# Default: true
+# detect_secrets = true
+
+# Maximum line length (warn if exceeded). Comment out to disable.
+# max_line_length = 120
 "#;
 
 /// Generate fini.toml in the specified directory (or current directory if None).
@@ -108,5 +131,44 @@ mod tests {
         let parsed: Result<super::super::toml_schema::FiniToml, _> =
             toml::from_str(FINI_TOML_TEMPLATE);
         assert!(parsed.is_ok());
+    }
+
+    /// Uncommenting every `# key = value` line in the generated template must still
+    /// produce valid, schema-conformant TOML (regression test for issue #82, where
+    /// `exclude` was placed inside `[normalize]` and uncommenting it broke
+    /// `deny_unknown_fields`).
+    #[test]
+    fn test_template_fully_uncommented_is_valid_toml() {
+        let mut in_array = false;
+        let uncommented: String = FINI_TOML_TEMPLATE
+            .lines()
+            .map(|line| {
+                let trimmed = line.trim_start();
+                let is_key_line = trimmed
+                    .strip_prefix("# ")
+                    .is_some_and(|rest| rest.contains('='));
+                let is_array_elem_line = in_array && trimmed.strip_prefix("# ").is_some();
+
+                if is_key_line || is_array_elem_line {
+                    let uncommented_line = line.replacen("# ", "", 1);
+                    if is_key_line && uncommented_line.trim_end().ends_with('[') {
+                        in_array = true;
+                    } else if in_array && uncommented_line.trim_end().ends_with(']') {
+                        in_array = false;
+                    }
+                    return uncommented_line;
+                }
+                line.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed: Result<super::super::toml_schema::FiniToml, _> = toml::from_str(&uncommented);
+        assert!(
+            parsed.is_ok(),
+            "uncommented template failed to parse: {:?}\n---\n{}",
+            parsed.err(),
+            uncommented
+        );
     }
 }
