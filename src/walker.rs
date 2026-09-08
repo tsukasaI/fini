@@ -1,7 +1,8 @@
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
+use std::collections::HashSet;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Walk paths and yield file paths, respecting gitignore and custom exclude patterns.
 ///
@@ -16,6 +17,10 @@ pub fn walk_paths(
     exclude_patterns: &[String],
 ) -> io::Result<impl Iterator<Item = io::Result<PathBuf>>> {
     let mut all_files = vec![];
+    // Overlapping path arguments (e.g. `fini src src/a.rs`) can walk the same
+    // file more than once; dedup so it's only ever processed once (issue
+    // #81). See `dedup_key` for the key used.
+    let mut seen = HashSet::new();
 
     for path in paths {
         let mut builder = WalkBuilder::new(path);
@@ -44,7 +49,10 @@ pub fn walk_paths(
             match entry {
                 Ok(entry) => {
                     if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                        all_files.push(Ok(entry.into_path()));
+                        let entry_path = entry.into_path();
+                        if seen.insert(dedup_key(&entry_path)) {
+                            all_files.push(Ok(entry_path));
+                        }
                     }
                 }
                 Err(e) => {
@@ -55,6 +63,24 @@ pub fn walk_paths(
     }
 
     Ok(all_files.into_iter())
+}
+
+/// Dedup key for a walked file: the canonicalized parent directory joined
+/// with the entry's own (non-canonicalized) file name, so the final path
+/// component is never resolved through a symlink. Falls back to the literal
+/// path when the parent can't be canonicalized (e.g. it vanished mid-walk).
+fn dedup_key(path: &Path) -> PathBuf {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    match parent.canonicalize() {
+        Ok(canon_parent) => match path.file_name() {
+            Some(name) => canon_parent.join(name),
+            None => canon_parent,
+        },
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +209,89 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         assert!(files[0].to_string_lossy().contains("app.js"));
+    }
+
+    #[test]
+    fn test_overlapping_dir_and_file_args_dedup_to_one() {
+        // Regression test for issue #81.
+        let dir = TempDir::new().unwrap();
+        let subdir = dir.path().join("dupdir");
+        fs::create_dir(&subdir).unwrap();
+        let file_path = subdir.join("f.txt");
+        fs::write(&file_path, "hello").unwrap();
+
+        let paths = vec![
+            subdir.to_string_lossy().to_string(),
+            file_path.to_string_lossy().to_string(),
+        ];
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(
+            files.len(),
+            1,
+            "duplicate path args must collapse: {files:?}"
+        );
+    }
+
+    #[test]
+    fn test_dotdot_path_and_plain_path_dedup_to_one() {
+        // "dupdir" and "dupdir/../dupdir" name the same directory but aren't
+        // `==` as `PathBuf`s (unlike an interior "/./", "/../" is not
+        // normalized away by `Path`'s component comparison), so this only
+        // passes if the dedup key actually canonicalizes.
+        let dir = TempDir::new().unwrap();
+        let subdir = dir.path().join("dupdir");
+        fs::create_dir(&subdir).unwrap();
+        fs::write(subdir.join("f.txt"), "hello").unwrap();
+
+        let paths = vec![
+            subdir.to_string_lossy().to_string(),
+            format!("{}/../dupdir", subdir.to_string_lossy()),
+        ];
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(
+            files.len(),
+            1,
+            "equivalent dir args must collapse: {files:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_and_target_are_not_deduped_together() {
+        // A dedup key built from a full canonicalize() of the entry would
+        // resolve link.txt to target.txt and silently drop one of them. The
+        // dedup key must only canonicalize the parent directory, never the
+        // final path component, so a symlink and its target remain distinct
+        // walk results.
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+        fs::write(&target, "hello").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        // Link listed first, matching the order a shell glob would produce.
+        let paths = vec![
+            link.to_string_lossy().to_string(),
+            target.to_string_lossy().to_string(),
+        ];
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(
+            files.len(),
+            2,
+            "a symlink root and its target are distinct paths, not duplicates: {files:?}"
+        );
     }
 
     #[test]
