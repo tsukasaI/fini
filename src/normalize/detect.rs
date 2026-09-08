@@ -168,14 +168,13 @@ pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem
         .collect()
 }
 
-/// A skip pattern only excuses a match when it occurs before or within the
-/// matched text itself — e.g. `token = "${API_TOKEN}"`, a placeholder — not
-/// when it trails a real secret as an unrelated comment, e.g.
-/// `password = "hunter2hunter2"  # ${`. Checking the whole line let a skip
-/// marker appended *after* the value defeat detection entirely (issue #77).
-fn skip_pattern_before_match_end(line: &str, match_end: usize) -> bool {
-    let prefix = &line[..match_end];
-    SECRET_SKIP_PATTERNS.iter().any(|p| prefix.contains(p))
+/// A skip pattern only excuses a match when it occurs within the matched text
+/// itself — e.g. `token = "process.env.API_TOKEN"`, a placeholder — not when
+/// it sits outside the match, such as an unrelated trailing comment
+/// (`password = "hunter2hunter2"  # ${`). Checking the whole line let a skip
+/// marker anywhere on the line defeat detection entirely (issue #77).
+fn skip_pattern_within_match(matched: &str) -> bool {
+    SECRET_SKIP_PATTERNS.iter().any(|p| matched.contains(p))
 }
 
 pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
@@ -187,7 +186,7 @@ pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
         .filter_map(|(line_idx, line)| {
             patterns.iter().find_map(|pattern| {
                 let m = pattern.regex.find(line)?;
-                if skip_pattern_before_match_end(line, m.end()) {
+                if skip_pattern_within_match(m.as_str()) {
                     return None;
                 }
                 Some(Problem {
@@ -435,9 +434,23 @@ mod tests {
     }
 
     #[test]
-    fn test_mask_secret_lines_keeps_skip_patterns() {
+    fn test_mask_secret_lines_leaves_non_matching_line_untouched() {
+        // Unquoted, so it never matches the "hardcoded secret" value pattern in
+        // the first place — this is not exercising skip-pattern behavior.
         let content = "password = process.env.PASSWORD\n";
         assert_eq!(mask_secret_lines(content), content);
+    }
+
+    // issue #77: masking must never depend on SECRET_SKIP_PATTERNS — even a
+    // line that legitimately matches a skip pattern (and is therefore not
+    // *reported*) still gets masked if it also matches a secret regex.
+    #[test]
+    fn test_mask_secret_lines_masks_even_when_skip_pattern_present() {
+        let content = "api_key = \"process.env.API_KEY\"\n";
+        assert!(detect_secret_patterns(content).is_empty());
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("process.env.API_KEY"));
+        assert!(masked.contains("[line masked: potential hardcoded secret]"));
     }
 
     #[test]
