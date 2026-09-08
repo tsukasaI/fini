@@ -1,5 +1,5 @@
 use crate::colors::Colors;
-use crate::normalize::{mask_secret_lines, NormalizeConfig, NormalizeResult, ProblemKind};
+use crate::normalize::{mask_secret_lines, NormalizeConfig, NormalizeResult, Problem, ProblemKind};
 use similar::{ChangeTag, TextDiff};
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -140,46 +140,63 @@ pub fn print_check_result(
         }
     }
 
-    for problem in &result.problems {
+    let stdout = io::stdout();
+    // Panicking on a failed stdout write matches println!'s historical behavior
+    print_problems_to(&mut stdout.lock(), &result.problems).expect("failed to write to stdout");
+}
+
+/// Prints the per-problem diagnostic list (e.g. "- TODO comment at line 3").
+/// Shared by file-mode check output (to stdout) and `--stdin --check`
+/// diagnostics (to stderr, since stdin's stdout is reserved for normalized
+/// content only - issue #38).
+pub fn print_problems_to<W: Write>(w: &mut W, problems: &[Problem]) -> io::Result<()> {
+    for problem in problems {
         match &problem.kind {
             ProblemKind::FullWidthSpace => {
-                println!("  - full-width space at line {}", problem.line);
+                writeln!(w, "  - full-width space at line {}", problem.line)?;
             }
             ProblemKind::LeadingBlankLines { count } => {
-                println!("  - {} leading blank line(s)", count);
+                writeln!(w, "  - {} leading blank line(s)", count)?;
             }
             ProblemKind::ZeroWidthCharacter => {
-                println!("  - zero-width character at line {}", problem.line);
+                writeln!(w, "  - zero-width character at line {}", problem.line)?;
             }
             ProblemKind::ExcessiveBlankLines { found, limit } => {
-                println!(
+                writeln!(
+                    w,
                     "  - {} consecutive blank lines at line {} (limit: {})",
                     found, problem.line, limit
-                );
+                )?;
             }
             ProblemKind::CodeBlockRemnant => {
-                println!("  - code block remnant at line {}", problem.line);
+                writeln!(w, "  - code block remnant at line {}", problem.line)?;
             }
             ProblemKind::TodoComment => {
-                println!("  - TODO comment at line {}", problem.line);
+                writeln!(w, "  - TODO comment at line {}", problem.line)?;
             }
             ProblemKind::FixmeComment => {
-                println!("  - FIXME comment at line {}", problem.line);
+                writeln!(w, "  - FIXME comment at line {}", problem.line)?;
             }
             ProblemKind::DebugCode { pattern } => {
-                println!("  - debug code '{}' at line {}", pattern, problem.line);
+                writeln!(w, "  - debug code '{}' at line {}", pattern, problem.line)?;
             }
             ProblemKind::SecretPattern { hint } => {
-                println!("  - potential secret ({}) at line {}", hint, problem.line);
+                writeln!(
+                    w,
+                    "  - potential secret ({}) at line {}",
+                    hint, problem.line
+                )?;
             }
             ProblemKind::LongLine { length, limit } => {
-                println!(
+                writeln!(
+                    w,
                     "  - line {} is too long ({} > {} chars)",
                     problem.line, length, limit
-                );
+                )?;
             }
         }
     }
+    Ok(())
 }
 
 pub fn print_fix_result(

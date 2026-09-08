@@ -7,8 +7,9 @@ use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
     load_config, mask_secret_lines, merge_exclude_patterns, merge_normalize_config,
-    normalize_content, parse_editorconfig, print_diff_to, run, should_use_colors,
-    CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
+    normalize_content, parse_editorconfig, print_diff_to, print_problems_to, run,
+    should_use_colors, CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode,
+    ProblemKind,
 };
 
 #[derive(Parser)]
@@ -231,10 +232,14 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
 
     if cli.check {
         if result.has_changes() || result.has_detection_problems() {
-            if cli.diff {
-                // Diff goes to stderr so stdout keeps its "normalized content
-                // only" contract (issue #38), masked like every other diff
-                // path (issue #44)
+            // Diagnostics go to stderr so stdout keeps its "normalized
+            // content only" contract (issue #38). Best-effort: a closed
+            // stderr must not mask the check failure exit code.
+            let mut stderr = io::stderr().lock();
+            if cli.diff && result.has_changes() {
+                // Matches file-mode's guard (print_check_result): skip the
+                // diff header entirely when there's no content change, since
+                // detection-only problems never touch result.content.
                 let (orig, new): (Cow<str>, Cow<str>) = if normalize.detect_secrets {
                     (
                         Cow::Owned(mask_secret_lines(&input)),
@@ -243,10 +248,9 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
                 } else {
                     (Cow::Borrowed(&input), Cow::Borrowed(&result.content))
                 };
-                // Best-effort diagnostics: a closed stderr must not mask the
-                // check failure exit code
-                let _ = print_diff_to(&mut io::stderr().lock(), "stdin", &orig, &new);
+                let _ = print_diff_to(&mut stderr, "stdin", &orig, &new);
             }
+            let _ = print_problems_to(&mut stderr, &result.problems);
             return ExitCode::from(1);
         }
         return ExitCode::SUCCESS;
