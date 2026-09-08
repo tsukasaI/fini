@@ -169,7 +169,7 @@ pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem
 }
 
 /// A skip pattern only excuses a match when it occurs within the matched text
-/// itself — e.g. `token = "process.env.API_TOKEN"`, a placeholder — not when
+/// itself — e.g. `api_key = "process.env.API_KEY"`, a placeholder — not when
 /// it sits outside the match, such as an unrelated trailing comment
 /// (`password = "hunter2hunter2"  # ${`). Checking the whole line let a skip
 /// marker anywhere on the line defeat detection entirely (issue #77).
@@ -185,14 +185,17 @@ pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
         .enumerate()
         .filter_map(|(line_idx, line)| {
             patterns.iter().find_map(|pattern| {
-                let m = pattern.regex.find(line)?;
-                if skip_pattern_within_match(m.as_str()) {
-                    return None;
-                }
-                Some(Problem {
-                    line: line_idx + 1,
-                    kind: ProblemKind::SecretPattern { hint: pattern.hint },
-                })
+                // find_iter (not find): a skipped placeholder match must not
+                // short-circuit past a later, unrelated real secret matching
+                // the same pattern on the same line.
+                pattern
+                    .regex
+                    .find_iter(line)
+                    .find(|m| !skip_pattern_within_match(m.as_str()))
+                    .map(|_| Problem {
+                        line: line_idx + 1,
+                        kind: ProblemKind::SecretPattern { hint: pattern.hint },
+                    })
             })
         })
         .collect()
@@ -359,6 +362,28 @@ mod tests {
     fn test_secret_skip_placeholder() {
         assert!(detect_secret_patterns("api_key = \"<your-api-key>\"\n").is_empty());
         assert!(detect_secret_patterns("token = \"${API_TOKEN}\"\n").is_empty());
+    }
+
+    // A quoted value that itself matches a skip pattern (unlike the cases
+    // above, which never match any secret regex regardless of skip logic)
+    // is still legitimately skipped from detection.
+    #[test]
+    fn test_secret_skip_quoted_env_reference() {
+        assert!(detect_secret_patterns("api_key = \"process.env.API_KEY\"\n").is_empty());
+    }
+
+    // issue #77: a skipped placeholder occurrence must not shadow a later,
+    // unrelated real secret matching the same pattern on the same line.
+    #[test]
+    fn test_secret_skip_does_not_shadow_later_real_secret_same_line() {
+        let problems = detect_secret_patterns(
+            "api_key = \"process.env.API_KEY\", password = \"hunter2hunter2\"\n",
+        );
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::SecretPattern { hint } if *hint == "hardcoded secret"
+        ));
     }
 
     // issue #77: a skip pattern trailing a real secret as an unrelated
