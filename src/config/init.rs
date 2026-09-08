@@ -144,9 +144,12 @@ mod tests {
             .lines()
             .map(|line| {
                 let trimmed = line.trim_start();
-                let is_key_line = trimmed
-                    .strip_prefix("# ")
-                    .is_some_and(|rest| rest.contains('='));
+                let is_key_line = trimmed.strip_prefix("# ").is_some_and(|rest| {
+                    rest.split_once(" = ").is_some_and(|(key, _)| {
+                        !key.is_empty()
+                            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    })
+                });
                 let is_array_elem_line = in_array && trimmed.strip_prefix("# ").is_some();
 
                 if is_key_line || is_array_elem_line {
@@ -164,11 +167,23 @@ mod tests {
             .join("\n");
 
         let parsed: Result<super::super::toml_schema::FiniToml, _> = toml::from_str(&uncommented);
-        assert!(
-            parsed.is_ok(),
-            "uncommented template failed to parse: {:?}\n---\n{}",
-            parsed.err(),
-            uncommented
-        );
+        let config = parsed.unwrap_or_else(|err| {
+            panic!("uncommented template failed to parse: {err:?}\n---\n{uncommented}")
+        });
+
+        // Assert every field actually landed, so a key silently missed by the
+        // uncomment logic above (or dropped from the template) fails loudly
+        // instead of passing on an incompletely-uncommented template.
+        assert_eq!(config.exclude.as_deref().map(<[String]>::len), Some(4));
+        assert_eq!(config.normalize.max_blank_lines, Some(2));
+        assert_eq!(config.normalize.remove_zero_width, Some(true));
+        assert_eq!(config.normalize.remove_leading_blanks, Some(true));
+        assert_eq!(config.normalize.fix_code_blocks, Some(false));
+        assert_eq!(config.normalize.detect_todos, Some(true));
+        assert_eq!(config.normalize.detect_fixmes, Some(true));
+        assert_eq!(config.normalize.detect_debug, Some(true));
+        assert_eq!(config.normalize.strict_debug, Some(false));
+        assert_eq!(config.normalize.detect_secrets, Some(true));
+        assert_eq!(config.normalize.max_line_length, Some(120));
     }
 }
