@@ -165,6 +165,10 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     result = fixed;
     problems.extend(fullwidth_problems);
 
+    // `line_map` is no longer updated past this point: none of the remaining
+    // fixes may remove or reorder a non-trailing line without threading a new
+    // map through, the same way the fixes above do. Trailing-newline
+    // collapsing below is fine as-is since it only shortens the tail.
     result = remove_trailing_whitespace(&result);
     result = normalize_eof_newline(&result);
 
@@ -1238,6 +1242,22 @@ mod tests {
             .find(|p| matches!(p.kind, ProblemKind::TodoComment));
         assert!(problem.is_some());
         assert_eq!(problem.unwrap().line, 4);
+    }
+
+    #[test]
+    fn test_fullwidth_space_line_number_reports_original_line_after_leading_blanks_removed() {
+        // Same regression as the TODO case above, but for a problem that
+        // itself comes out of a fix pass (not a detector) — fix_fullwidth_spaces
+        // runs after leading-blank removal, so it must consult the shifted
+        // line_map too, not just the final detectors (issue #76).
+        let input = "\n\nhello\u{3000}world\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        let problem = result
+            .problems
+            .iter()
+            .find(|p| p.kind == ProblemKind::FullWidthSpace);
+        assert!(problem.is_some());
+        assert_eq!(problem.unwrap().line, 3);
     }
 
     #[test]

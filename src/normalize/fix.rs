@@ -81,7 +81,7 @@ pub(super) fn remove_leading_blank_lines(
     let result = lines
         .get(first_non_blank..)
         .map_or(String::new(), |rest| rest.join("\n"));
-    let new_line_map = line_map[first_non_blank.min(line_map.len())..].to_vec();
+    let new_line_map = line_map[first_non_blank..].to_vec();
 
     (result, new_line_map, problems)
 }

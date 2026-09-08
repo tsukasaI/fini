@@ -52,9 +52,12 @@ pub(super) fn parse_ignore_directives(content: &str, line_map: &[usize]) -> Igno
 
     for (idx, line) in content.lines().enumerate() {
         let line_num = line_map[idx];
-        // Best-effort original line number for the line right after this one;
-        // if there's no such line (directive on the last line of the file),
-        // this key won't match any real problem.
+        // Best-effort original line number for the line right after this one
+        // (in `content`, i.e. the surviving line, not necessarily original
+        // line_num + 1 — a fini:ignore-next-line directive immediately
+        // followed by a line a fix removed, e.g. a code fence, targets a line
+        // that no longer exists in `content` by the time this runs, so it
+        // can't be recovered here; unmatched key if there's no next line).
         let next_line_num = line_map.get(idx + 1).copied().unwrap_or(line_num + 1);
 
         if let Some(pos) = line.find(NEXT_LINE_DIRECTIVE) {
