@@ -246,18 +246,24 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
                     } else {
                         (Cow::Borrowed(&input), Cow::Borrowed(&result.content))
                     };
-                    // Matches file-mode's guard (print_check_result): skip
-                    // the diff header when there's nothing to show a diff
-                    // of - either no content change, or masking collapsed
-                    // the only change (a secret line) to identical text.
+                    // Skip the diff header when there's nothing to show a
+                    // diff of - either no content change, or masking
+                    // collapsed the only change (a secret line) to identical
+                    // text. Stricter than file-mode's print_check_result,
+                    // which only guards on the unmasked has_changes().
                     if orig != new {
                         let _ = print_diff_to(&mut stderr, "stdin", &orig, &new);
                     }
-                } else if result.has_changes() {
-                    // Detection-only problems never touch result.content, so
-                    // there's nothing to summarize for them here - they're
-                    // covered by print_problems_to below regardless.
-                    let _ = print_change_summary_to(&mut stderr, &input, &result.content);
+                } else {
+                    // Unconditional header (mirrors file-mode's "Error: <path>"
+                    // in print_check_result): some fix-only transforms - e.g.
+                    // CRLF normalization - fire neither a Problem entry nor a
+                    // print_change_summary_to bullet, so without this stderr
+                    // could otherwise stay empty despite the exit 1.
+                    let _ = writeln!(stderr, "Error: stdin");
+                    if result.has_changes() {
+                        let _ = print_change_summary_to(&mut stderr, &input, &result.content);
+                    }
                 }
                 let _ = print_problems_to(&mut stderr, &result.problems);
             }
