@@ -77,6 +77,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
     "watch": "npm run compile -- --watch",
+    "test": "node --test",
     "package": "vsce package",
     "publish": "vsce publish"
   },
