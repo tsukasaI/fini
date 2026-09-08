@@ -101,9 +101,10 @@ jobs:
           generate_release_notes: true
 
   update-homebrew-formula:
-    # publish-crate has already validated GITHUB_REF_NAME against Cargo.toml's
-    # version by the time this runs, so a malformed/malicious tag can never
-    # reach this job's push-to-main step without also failing that check.
+    # Defense-in-depth sequencing: the primary control is this job's own
+    # "Validate tag format" step below. Depending on publish-crate too means
+    # a tag that fails its Cargo.toml version match also blocks this job,
+    # even though that check doesn't itself constrain the tag's charset.
     needs: [release, publish-crate]
     runs-on: ubuntu-latest
     permissions:
