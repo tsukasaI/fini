@@ -168,6 +168,16 @@ pub(super) fn detect_debug_code(content: &str, strict_mode: bool) -> Vec<Problem
         .collect()
 }
 
+/// A skip pattern only excuses a match when it occurs before or within the
+/// matched text itself — e.g. `token = "${API_TOKEN}"`, a placeholder — not
+/// when it trails a real secret as an unrelated comment, e.g.
+/// `password = "hunter2hunter2"  # ${`. Checking the whole line let a skip
+/// marker appended *after* the value defeat detection entirely (issue #77).
+fn skip_pattern_before_match_end(line: &str, match_end: usize) -> bool {
+    let prefix = &line[..match_end];
+    SECRET_SKIP_PATTERNS.iter().any(|p| prefix.contains(p))
+}
+
 pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
     let patterns = &*SECRET_PATTERNS;
 
@@ -175,17 +185,16 @@ pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
-            if SECRET_SKIP_PATTERNS.iter().any(|p| line.contains(p)) {
-                return None;
-            }
-
-            patterns
-                .iter()
-                .find(|p| p.regex.is_match(line))
-                .map(|pattern| Problem {
+            patterns.iter().find_map(|pattern| {
+                let m = pattern.regex.find(line)?;
+                if skip_pattern_before_match_end(line, m.end()) {
+                    return None;
+                }
+                Some(Problem {
                     line: line_idx + 1,
                     kind: ProblemKind::SecretPattern { hint: pattern.hint },
                 })
+            })
         })
         .collect()
 }
@@ -195,20 +204,21 @@ pub(super) fn detect_secret_patterns(content: &str) -> Vec<Problem> {
 /// The checker deliberately reports secrets hint-only (the matched value never
 /// enters a `Problem`); diff output must honor the same contract, including
 /// unchanged context lines, so raw values never reach CI logs (issue #44).
+///
+/// Masking ignores `SECRET_SKIP_PATTERNS` entirely (unlike `detect_secret_patterns`):
+/// a skip pattern only decides whether a match is *reported*, never whether a
+/// diff shows raw secret-shaped text — an unrelated trailing comment (or any
+/// other skip-pattern occurrence) must not un-mask a real secret (issue #77).
 pub(super) fn mask_secret_lines(content: &str) -> String {
     let patterns = &*SECRET_PATTERNS;
     let mut out = String::with_capacity(content.len());
 
     for line in content.split_inclusive('\n') {
         let text = line.strip_suffix('\n').unwrap_or(line);
-        let hint = if SECRET_SKIP_PATTERNS.iter().any(|p| text.contains(p)) {
-            None
-        } else {
-            patterns
-                .iter()
-                .find(|p| p.regex.is_match(text))
-                .map(|p| p.hint)
-        };
+        let hint = patterns
+            .iter()
+            .find(|p| p.regex.is_match(text))
+            .map(|p| p.hint);
 
         match hint {
             Some(hint) => {
@@ -350,6 +360,29 @@ mod tests {
     fn test_secret_skip_placeholder() {
         assert!(detect_secret_patterns("api_key = \"<your-api-key>\"\n").is_empty());
         assert!(detect_secret_patterns("token = \"${API_TOKEN}\"\n").is_empty());
+    }
+
+    // issue #77: a skip pattern trailing a real secret as an unrelated
+    // comment must not bypass detection or diff masking.
+    #[test]
+    fn test_secret_trailing_comment_does_not_bypass_detection() {
+        let problems = detect_secret_patterns("password = \"hunter2hunter2\"  # ${\n");
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::SecretPattern { hint } if *hint == "hardcoded secret"
+        ));
+
+        let problems =
+            detect_secret_patterns("aws_access_key_id = \"AKIAQWERTYUIOPASDFGH\"  // {{\n");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_trailing_comment_still_masked() {
+        let masked = mask_secret_lines("password = \"hunter2hunter2\"  # ${\n");
+        assert!(!masked.contains("hunter2hunter2"));
+        assert!(masked.contains("[line masked: potential hardcoded secret]"));
     }
 
     #[test]
