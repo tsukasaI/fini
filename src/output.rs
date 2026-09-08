@@ -113,30 +113,9 @@ pub fn print_check_result(
         );
 
         if result.has_changes() {
-            let orig_trimmed = original.trim_end_matches(['\n', '\r']);
-            let orig_trailing_newlines = original[orig_trimmed.len()..]
-                .chars()
-                .filter(|&c| c == '\n')
-                .count();
-            let result_trimmed = result.content.trim_end_matches(['\n', '\r']);
-            let result_trailing_newlines = result.content[result_trimmed.len()..]
-                .chars()
-                .filter(|&c| c == '\n')
-                .count();
-
-            if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
-                println!("  - missing EOF newline");
-            } else if orig_trailing_newlines > 1
-                && result_trailing_newlines < orig_trailing_newlines
-            {
-                println!("  - extra trailing newline(s) removed");
-            }
-
-            for (i, orig_line) in original.lines().enumerate() {
-                if orig_line.len() != orig_line.trim_end().len() {
-                    println!("  - trailing whitespace at line {}", i + 1);
-                }
-            }
+            let stdout = io::stdout();
+            print_change_summary_to(&mut stdout.lock(), original, &result.content)
+                .expect("failed to write to stdout");
         }
     }
 
@@ -145,10 +124,45 @@ pub fn print_check_result(
     print_problems_to(&mut stdout.lock(), &result.problems).expect("failed to write to stdout");
 }
 
+/// Prints the content-diff-derived summary lines (missing EOF newline, extra
+/// trailing newlines, trailing whitespace) that Normal-mode check output
+/// shows in place of a diff. Shared by file-mode check output (to stdout)
+/// and `--stdin --check` without `--diff` (to stderr, since stdin's stdout
+/// is reserved for normalized content only - issue #38) - both need these
+/// bullets since fix-only problems never populate `result.problems` (issue
+/// #79).
+pub fn print_change_summary_to<W: Write>(
+    w: &mut W,
+    original: &str,
+    result_content: &str,
+) -> io::Result<()> {
+    let orig_trimmed = original.trim_end_matches(['\n', '\r']);
+    let orig_trailing_newlines = original[orig_trimmed.len()..]
+        .chars()
+        .filter(|&c| c == '\n')
+        .count();
+    let result_trimmed = result_content.trim_end_matches(['\n', '\r']);
+    let result_trailing_newlines = result_content[result_trimmed.len()..]
+        .chars()
+        .filter(|&c| c == '\n')
+        .count();
+
+    if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
+        writeln!(w, "  - missing EOF newline")?;
+    } else if orig_trailing_newlines > 1 && result_trailing_newlines < orig_trailing_newlines {
+        writeln!(w, "  - extra trailing newline(s) removed")?;
+    }
+
+    for (i, orig_line) in original.lines().enumerate() {
+        if orig_line.len() != orig_line.trim_end().len() {
+            writeln!(w, "  - trailing whitespace at line {}", i + 1)?;
+        }
+    }
+    Ok(())
+}
+
 /// Prints the per-problem diagnostic list (e.g. "- TODO comment at line 3").
-/// Shared by file-mode check output (to stdout) and `--stdin --check`
-/// diagnostics (to stderr, since stdin's stdout is reserved for normalized
-/// content only - issue #38).
+/// Shared by file-mode check output and `--stdin --check` (issue #38, #79).
 pub fn print_problems_to<W: Write>(w: &mut W, problems: &[Problem]) -> io::Result<()> {
     for problem in problems {
         match &problem.kind {

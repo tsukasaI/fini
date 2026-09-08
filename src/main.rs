@@ -7,9 +7,9 @@ use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
     load_config, mask_secret_lines, merge_exclude_patterns, merge_normalize_config,
-    normalize_content, parse_editorconfig, print_diff_to, print_problems_to, run,
-    should_use_colors, CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode,
-    ProblemKind,
+    normalize_content, parse_editorconfig, print_change_summary_to, print_diff_to,
+    print_problems_to, run, should_use_colors, CliNormalizeOptions, Config, FiniToml,
+    OutputContext, OutputMode, ProblemKind,
 };
 
 #[derive(Parser)]
@@ -232,25 +232,35 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
 
     if cli.check {
         if result.has_changes() || result.has_detection_problems() {
-            // Diagnostics go to stderr so stdout keeps its "normalized
-            // content only" contract (issue #38). Best-effort: a closed
-            // stderr must not mask the check failure exit code.
-            let mut stderr = io::stderr().lock();
-            if cli.diff && result.has_changes() {
-                // Matches file-mode's guard (print_check_result): skip the
-                // diff header entirely when there's no content change, since
-                // detection-only problems never touch result.content.
-                let (orig, new): (Cow<str>, Cow<str>) = if normalize.detect_secrets {
-                    (
-                        Cow::Owned(mask_secret_lines(&input)),
-                        Cow::Owned(mask_secret_lines(&result.content)),
-                    )
-                } else {
-                    (Cow::Borrowed(&input), Cow::Borrowed(&result.content))
-                };
-                let _ = print_diff_to(&mut stderr, "stdin", &orig, &new);
+            if !cli.quiet {
+                // Diagnostics go to stderr so stdout keeps its "normalized
+                // content only" contract (issue #38). Best-effort: a closed
+                // stderr must not mask the check failure exit code.
+                let mut stderr = io::stderr().lock();
+                if cli.diff {
+                    let (orig, new): (Cow<str>, Cow<str>) = if normalize.detect_secrets {
+                        (
+                            Cow::Owned(mask_secret_lines(&input)),
+                            Cow::Owned(mask_secret_lines(&result.content)),
+                        )
+                    } else {
+                        (Cow::Borrowed(&input), Cow::Borrowed(&result.content))
+                    };
+                    // Matches file-mode's guard (print_check_result): skip
+                    // the diff header when there's nothing to show a diff
+                    // of - either no content change, or masking collapsed
+                    // the only change (a secret line) to identical text.
+                    if orig != new {
+                        let _ = print_diff_to(&mut stderr, "stdin", &orig, &new);
+                    }
+                } else if result.has_changes() {
+                    // Detection-only problems never touch result.content, so
+                    // there's nothing to summarize for them here - they're
+                    // covered by print_problems_to below regardless.
+                    let _ = print_change_summary_to(&mut stderr, &input, &result.content);
+                }
+                let _ = print_problems_to(&mut stderr, &result.problems);
             }
-            let _ = print_problems_to(&mut stderr, &result.problems);
             return ExitCode::from(1);
         }
         return ExitCode::SUCCESS;
