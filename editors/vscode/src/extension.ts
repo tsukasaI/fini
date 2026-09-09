@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
+import { collectOutput } from './procOutput';
 
 let outputChannel: vscode.OutputChannel;
 
@@ -62,16 +63,13 @@ function compareVersions(a: [number, number, number], b: [number, number, number
 
 function checkCliCompatibility(finiPath: string) {
     const proc = spawn(finiPath, ['--version']);
-
-    let stdout = '';
-    proc.stdout.on('data', (data) => {
-        stdout += data.toString();
-    });
+    const output = collectOutput(proc);
 
     proc.on('close', (code) => {
         if (code !== 0) {
             return;
         }
+        const stdout = output.stdout();
         // `fini X.Y.Z` — shape covered by the CLI's version-output test
         const match = stdout.trim().match(/^fini (\d+)\.(\d+)\.(\d+)/);
         if (!match) {
@@ -115,18 +113,12 @@ async function formatDocument(document: vscode.TextDocument): Promise<vscode.Tex
             cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
         });
 
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout.on('data', (data) => {
-            stdout += data.toString();
-        });
-
-        proc.stderr.on('data', (data) => {
-            stderr += data.toString();
-        });
+        const output = collectOutput(proc);
 
         proc.on('close', (code) => {
+            const stdout = output.stdout();
+            const stderr = output.stderr();
+
             if (code !== 0) {
                 outputChannel.appendLine(`fini exited with code ${code}`);
                 if (stderr) {
