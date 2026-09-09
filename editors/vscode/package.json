@@ -10,7 +10,8 @@
   },
   "license": "MIT",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.85.0",
+    "node": ">=22.18.0"
   },
   "categories": [
     "Formatters",
