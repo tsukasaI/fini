@@ -1,6 +1,6 @@
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -21,6 +21,9 @@ pub fn walk_paths(
     // file more than once; dedup so it's only ever processed once (issue
     // #81). See `dedup_key` for the key used.
     let mut seen = HashSet::new();
+    // Caches each parent directory's canonicalize() result so a directory
+    // with many files pays that syscall once, not once per file.
+    let mut canon_parent_cache = HashMap::new();
 
     for path in paths {
         let mut builder = WalkBuilder::new(path);
@@ -50,7 +53,7 @@ pub fn walk_paths(
                 Ok(entry) => {
                     if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                         let entry_path = entry.into_path();
-                        if seen.insert(dedup_key(&entry_path)) {
+                        if seen.insert(dedup_key(&entry_path, &mut canon_parent_cache)) {
                             all_files.push(Ok(entry_path));
                         }
                     }
@@ -68,18 +71,32 @@ pub fn walk_paths(
 /// Dedup key for a walked file: the canonicalized parent directory joined
 /// with the entry's own (non-canonicalized) file name, so the final path
 /// component is never resolved through a symlink. Falls back to the literal
-/// path when the parent can't be canonicalized (e.g. it vanished mid-walk).
-fn dedup_key(path: &Path) -> PathBuf {
+/// path when the parent can't be canonicalized (e.g. it vanished mid-walk) —
+/// the worst case is then a duplicate entry (pre-fix behavior), never a
+/// dropped file, so failing this way is safe.
+///
+/// `cache` memoizes each literal parent's canonicalize() result (`None` on
+/// failure) so a directory with many files pays that syscall once rather
+/// than once per file.
+///
+/// Known limitation: the file-name component is compared literally, so on a
+/// case-insensitive filesystem (default macOS/Windows) two args differing
+/// only in case (`A.rs` vs `a.rs`) that name the same file are not deduped.
+fn dedup_key(path: &Path, cache: &mut HashMap<PathBuf, Option<PathBuf>>) -> PathBuf {
     let parent = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
-    match parent.canonicalize() {
-        Ok(canon_parent) => match path.file_name() {
+    let canon_parent = cache
+        .entry(parent.to_path_buf())
+        .or_insert_with(|| parent.canonicalize().ok())
+        .clone();
+    match canon_parent {
+        Some(canon_parent) => match path.file_name() {
             Some(name) => canon_parent.join(name),
             None => canon_parent,
         },
-        Err(_) => path.to_path_buf(),
+        None => path.to_path_buf(),
     }
 }
 
@@ -88,6 +105,13 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_dedup_key_falls_back_to_literal_path_when_parent_missing() {
+        let mut cache = HashMap::new();
+        let path = Path::new("/definitely/nonexistent/dir/f.txt");
+        assert_eq!(dedup_key(path, &mut cache), path.to_path_buf());
+    }
 
     #[test]
     fn test_walk_single_file() {
