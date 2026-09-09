@@ -242,6 +242,26 @@ mod tests {
     }
 
     #[test]
+    fn test_ignore_directive_suppressed_line_uses_original_number_after_shift() {
+        let input = "\n\npassword = \"supersecret123\" # fini:ignore secret\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.suppressed.len(), 1);
+        assert_eq!(result.suppressed[0].line, 3);
+    }
+
+    #[test]
+    fn test_ignore_next_line_targets_literal_next_line_after_shift() {
+        let input = "\n\n// fini:ignore-next-line\n// TODO: x\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(result
+            .problems
+            .iter()
+            .all(|p| !matches!(p.kind, ProblemKind::TodoComment)));
+        assert_eq!(result.suppressed.len(), 1);
+        assert_eq!(result.suppressed[0].line, 4);
+    }
+
+    #[test]
     fn test_no_directives_leaves_suppressed_empty() {
         let input = "// TODO: fix this\n";
         let result = normalize_content(input, &NormalizeConfig::default());
