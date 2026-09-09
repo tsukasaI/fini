@@ -101,7 +101,11 @@ jobs:
           generate_release_notes: true
 
   update-homebrew-formula:
-    needs: release
+    # Defense-in-depth sequencing: the primary control is this job's own
+    # "Validate tag format" step below. Depending on publish-crate too means
+    # a tag that fails its Cargo.toml version match also blocks this job,
+    # even though that check doesn't itself constrain the tag's charset.
+    needs: [release, publish-crate]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # push the regenerated formula back to main
@@ -109,6 +113,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+
+      - name: Validate tag format
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match expected format vX.Y.Z[-prerelease]" >&2
+            exit 1
+          fi
 
       - name: Download release assets
         env:
