@@ -14,7 +14,10 @@ pub use config::{
 pub use normalize::{
     mask_secret_lines, normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind,
 };
-pub use output::{print_diff, print_diff_to, Config, OutputContext, OutputMode, RunResult};
+pub use output::{
+    print_change_summary_to, print_diff, print_diff_to, print_problems_to, Config, OutputContext,
+    OutputMode, RunResult,
+};
 pub use progress::ProgressReporter;
 pub use walker::walk_paths;
 

@@ -1354,3 +1354,229 @@ fn test_stdin_check_mode_passes_clean_input() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
 }
+
+#[test]
+fn test_stdin_check_detection_only_prints_problem_to_stderr() {
+    // Regression test for issue #79: detection-only problems (no content
+    // changes) used to exit 1 with zero diagnostics anywhere.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"TODO: x\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        stderr.contains("TODO comment at line 1"),
+        "problem diagnostic missing from stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_stdin_check_diff_no_content_change_omits_diff_header() {
+    // Regression test for issue #79: --stdin --check --diff used to print an
+    // empty `--- stdin` / `+++ stdin` header even when nothing but a
+    // detection-only problem was found (no content diff to show).
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .arg("--diff")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"TODO: x\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        !stderr.contains("--- stdin"),
+        "diff header should be omitted with no content change: {stderr}"
+    );
+    assert!(
+        stderr.contains("TODO comment at line 1"),
+        "problem diagnostic missing from stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_stdin_check_diff_with_content_change_shows_diff_and_problem() {
+    // Regression test for issue #79: when both a content change and a
+    // detection-only problem are present, --diff must still show the diff
+    // (no regression from the no-op-diff guard) and the problem list must
+    // still run alongside it.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .arg("--diff")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"TODO: x  \n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        stderr.contains("--- stdin") && stderr.contains("+++ stdin"),
+        "diff header missing on real content change: {stderr}"
+    );
+    assert!(
+        stderr.contains("TODO comment at line 1"),
+        "problem diagnostic missing from stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_stdin_check_fix_only_problem_prints_summary_without_diff() {
+    // Regression test for issue #79: a fix-only problem (trailing whitespace,
+    // missing EOF newline, ...) never populates result.problems, so without
+    // this summary --stdin --check exited 1 with zero diagnostics for the
+    // most common trigger.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"hello   \n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        stderr.contains("trailing whitespace at line 1"),
+        "fix-only diagnostic missing from stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_stdin_check_crlf_only_change_prints_diagnostic() {
+    // Regression test for issue #79: CRLF normalization is a fix-only
+    // transform that fires neither a Problem entry (no ProblemKind variant
+    // for it) nor a print_change_summary_to bullet (trailing-newline counts
+    // and trimmed trailing-whitespace lines are unaffected by CRLF->LF), so
+    // it used to leave stderr completely empty despite the exit 1.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"hello\r\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        !stderr.is_empty(),
+        "stderr must not be empty on a CRLF-only check failure"
+    );
+}
+
+#[test]
+fn test_stdin_check_diff_masked_to_no_diff_omits_diff_header() {
+    // Regression test for issue #79: masking a secret line can make the
+    // masked original and masked normalized content identical even though
+    // result.has_changes() is true (the unmasked content did change, e.g.
+    // trailing whitespace on the secret line itself) - the diff header must
+    // still be omitted in that case, and the secret value must never reach
+    // stderr.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .arg("--diff")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"  \n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+    assert!(
+        !stderr.contains("--- stdin"),
+        "diff header should be omitted when masking collapses the diff: {stderr}"
+    );
+    assert!(
+        !stderr.contains("AKIAABCDEFGHIJKLMNOP"),
+        "secret value must never reach stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("potential secret"),
+        "secret hint missing from stderr: {stderr}"
+    );
+}
