@@ -20,6 +20,15 @@ ASSETS_DIR="$2"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FORMULA="$REPO_ROOT/HomebrewFormula/fini.rb"
 
+# VERSION is embedded verbatim into a Ruby heredoc below (version "$VERSION"),
+# so it must be restricted to a safe charset before that happens — this
+# guards direct/manual invocations even though the release workflow also
+# validates the tag before calling this script.
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+  echo "error: invalid version '$VERSION' (expected X.Y.Z or X.Y.Z-prerelease)" >&2
+  exit 2
+fi
+
 if command -v sha256sum >/dev/null 2>&1; then
   SHA256() { sha256sum "$@"; }
 else
