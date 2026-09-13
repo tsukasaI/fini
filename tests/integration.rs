@@ -801,6 +801,31 @@ fn test_check_mode_reports_extra_trailing_newlines_with_crlf() {
 }
 
 #[test]
+fn test_check_mode_reports_original_line_number_after_leading_blanks_removed() {
+    // Regression test for issue #76: detection line numbers must refer to the
+    // original file the user has open, not the post-fix content. `--check`
+    // never writes, so a line number shifted by the (unapplied) leading-blank
+    // fix is simply wrong.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("c.txt");
+    fs::write(&file, "\n\n\n// TODO: fix this\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("TODO comment at line 4"),
+        "expected TODO reported at original line 4, got: {stdout}"
+    );
+}
+
+#[test]
 fn test_exit_code_2_on_invalid_exclude_pattern() {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("test.txt");
