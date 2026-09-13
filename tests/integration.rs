@@ -1290,6 +1290,74 @@ fn test_symlink_target_never_rewritten() {
 }
 
 // ===========================================
+// Overlapping Path Arguments (issue #81)
+// ===========================================
+
+#[test]
+fn test_overlapping_dir_and_file_args_fix_once() {
+    let dir = TempDir::new().unwrap();
+    let subdir = dir.path().join("dupdir");
+    fs::create_dir(&subdir).unwrap();
+    let file = subdir.join("f.txt");
+    fs::write(&file, "hello   \n").unwrap();
+
+    let output = fini_cmd()
+        .arg(subdir.to_str().unwrap())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(!stderr.contains("changed on disk"), "stderr: {stderr}");
+    assert_eq!(
+        stdout.matches("Fixed:").count(),
+        1,
+        "file named by two overlapping path args must be fixed exactly once: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 files fixed"),
+        "summary must count the file once: {stdout}"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
+}
+
+#[test]
+fn test_overlapping_dir_and_file_args_check_mode_counts_once() {
+    let dir = TempDir::new().unwrap();
+    let subdir = dir.path().join("dupdir");
+    fs::create_dir(&subdir).unwrap();
+    let file = subdir.join("f.txt");
+    fs::write(&file, "hello   \n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(subdir.to_str().unwrap())
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "stdout: {stdout}");
+    assert_eq!(
+        stdout.matches("f.txt").count(),
+        1,
+        "file named by two overlapping path args must be reported exactly once: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 files with problems"),
+        "summary must count the file once: {stdout}"
+    );
+    // File must be untouched in check mode.
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello   \n");
+}
+
+// ===========================================
 // Stdin Mode
 // ===========================================
 
