@@ -10,7 +10,7 @@ let outputChannel: vscode.OutputChannel;
 // blocked. Widen/shift this range in the release that adapts to a --stdin
 // contract change (see release-playbook).
 const COMPATIBLE_CLI_MIN: [number, number, number] = [0, 3, 0];
-const COMPATIBLE_CLI_MAX_EXCLUSIVE: [number, number, number] = [0, 5, 0];
+const COMPATIBLE_CLI_MAX_EXCLUSIVE: [number, number, number] = [0, 7, 0];
 
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('fini');
