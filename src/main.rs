@@ -5,11 +5,11 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use fini::{
-    check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
-    load_config, mask_secret_lines, merge_exclude_patterns, merge_normalize_config,
-    normalize_content, parse_editorconfig, print_change_summary_to, print_diff_to,
-    print_problems_to, run, safe_path_display, should_use_colors, CliNormalizeOptions, Config,
-    FiniToml, OutputContext, OutputMode, ProblemKind,
+    check_editorconfig_conflicts, escape_line_breaks, find_config_file, find_editorconfig,
+    generate_init_file, load_config, mask_secret_lines, merge_exclude_patterns,
+    merge_normalize_config, normalize_content, parse_editorconfig, print_change_summary_to,
+    print_diff_to, print_problems_to, run, safe_path_display, should_use_colors,
+    CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
 #[derive(Parser)]
@@ -190,7 +190,8 @@ fn main() -> ExitCode {
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
+            // Can embed a user-supplied --exclude pattern (issue #87).
+            eprintln!("Error: {}", escape_line_breaks(&e.to_string()));
             ExitCode::from(2)
         }
     }

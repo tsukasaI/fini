@@ -2026,7 +2026,17 @@ fn test_issue_87_walk_error_message() {
     perms.set_mode(0o755);
     fs::set_permissions(&blocked, perms).unwrap();
 
+    // Running as root ignores the 000 permission, which would make the loop
+    // below pass on empty stderr instead of actually exercising the fix.
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected a walk error (permission denied); stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("evil\\nFixed"), "{stderr:?}");
     for line in stderr.lines() {
         assert!(
             line.starts_with("Error walking path:"),

@@ -200,7 +200,7 @@ fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
             eprintln!(
                 "Warning: `git ls-files` failed in {}: {} (tracked-but-gitignored files there were not rescanned)",
                 crate::output::safe_path_display(root),
-                String::from_utf8_lossy(&output.stderr).trim()
+                crate::output::escape_line_breaks(String::from_utf8_lossy(&output.stderr).trim())
             );
         }
         return Vec::new();
