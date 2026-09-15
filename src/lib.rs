@@ -15,8 +15,8 @@ pub use normalize::{
     mask_secret_lines, normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind,
 };
 pub use output::{
-    print_change_summary_to, print_diff, print_diff_to, print_problems_to, Config, OutputContext,
-    OutputMode, RunResult,
+    print_change_summary_to, print_diff, print_diff_to, print_problems_to, safe_path_display,
+    Config, OutputContext, OutputMode, RunResult,
 };
 pub use progress::ProgressReporter;
 pub use walker::walk_paths;
@@ -146,7 +146,10 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
                                 if let Err(e) =
                                     write_atomic(path, &normalize_result.content, *modified, *len)
                                 {
-                                    eprintln!("Error writing {}: {e}", path.display());
+                                    eprintln!(
+                                        "Error writing {}: {e}",
+                                        output::safe_path_display(path)
+                                    );
                                     result.errors += 1;
                                     continue;
                                 }
@@ -160,7 +163,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
                     }
                 }
                 FileOutcome::Error(e) => {
-                    eprintln!("Error processing {}: {e}", path.display());
+                    eprintln!("Error processing {}: {e}", output::safe_path_display(path));
                     result.errors += 1;
                 }
             }
@@ -262,7 +265,7 @@ fn record_suppressed(path: &Path, suppressed: &[Problem], result: &mut RunResult
             result.suppressed_secrets += 1;
             eprintln!(
                 "Warning: {}:{} potential secret ({hint}) suppressed by fini:ignore",
-                path.display(),
+                output::safe_path_display(path),
                 problem.line
             );
         }

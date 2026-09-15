@@ -8,8 +8,8 @@ use fini::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
     load_config, mask_secret_lines, merge_exclude_patterns, merge_normalize_config,
     normalize_content, parse_editorconfig, print_change_summary_to, print_diff_to,
-    print_problems_to, run, should_use_colors, CliNormalizeOptions, Config, FiniToml,
-    OutputContext, OutputMode, ProblemKind,
+    print_problems_to, run, safe_path_display, should_use_colors, CliNormalizeOptions, Config,
+    FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
 #[derive(Parser)]
@@ -199,7 +199,7 @@ fn main() -> ExitCode {
 fn handle_init() -> ExitCode {
     match generate_init_file() {
         Ok(path) => {
-            println!("Created {}", path.display());
+            println!("Created {}", safe_path_display(&path));
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -303,11 +303,11 @@ fn load_configuration(
     match load_config(&p) {
         Ok(config) => {
             if !quiet {
-                eprintln!("Using config: {}", p.display());
+                eprintln!("Using config: {}", safe_path_display(&p));
             }
             Ok(Some(config))
         }
-        Err(e) => Err(format!("{}: {e}", p.display())),
+        Err(e) => Err(format!("{}: {e}", safe_path_display(&p))),
     }
 }
 

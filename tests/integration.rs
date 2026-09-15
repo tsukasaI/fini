@@ -1938,3 +1938,34 @@ fn test_issue_84() {
 
     assert_eq!(output.status.code(), Some(2));
 }
+
+// issue #87: a filename containing a newline must not forge extra output
+// lines — --quiet mode's contract is one path per line, and a crafted
+// filename could otherwise spoof a fake result line for a different file.
+#[cfg(unix)]
+#[test]
+fn test_issue_87() {
+    let dir = TempDir::new().unwrap();
+    let evil_name = "evil\nFixed: not_a_real_file.txt";
+    let file = dir.path().join(evil_name);
+    fs::write(&file, "hello").unwrap(); // missing EOF newline, so it's "fixed"
+
+    let output = fini_cmd()
+        .arg("--quiet")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "the embedded newline must not produce a second output line: {stdout:?}"
+    );
+    assert!(
+        lines[0].contains("evil\\nFixed"),
+        "the newline must be escaped, not printed literally: {stdout:?}"
+    );
+}
