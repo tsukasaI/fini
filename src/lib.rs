@@ -82,7 +82,10 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         match entry {
             Ok(path) => file_paths.push(path),
             Err(e) => {
-                eprintln!("Error walking path: {e}");
+                eprintln!(
+                    "Error walking path: {}",
+                    output::escape_line_breaks(&e.to_string())
+                );
                 result.errors += 1;
             }
         }

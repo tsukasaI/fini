@@ -5,16 +5,22 @@ use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// A path's `Display` form, safe to print as a standalone output line. A
-/// filename containing `\n` or `\r` would otherwise forge extra output
+/// Escapes `\r` and `\n` so `s` is safe to print as a standalone output
+/// line. A string containing either would otherwise forge extra output
 /// lines (issue #87) - e.g. `--quiet` mode's one-path-per-line contract,
 /// which scripts parse, or a fake "Fixed: <other-file>" line spoofing a
-/// result for a file that was never touched.
+/// result for a file that was never touched. Used both for a path's own
+/// `Display` form (`safe_path_display`) and for error text that embeds a
+/// path (e.g. a walk error from the `ignore` crate), since by the time
+/// that text reaches us it's already a flattened string, not a `Path`.
+pub fn escape_line_breaks(s: &str) -> String {
+    s.replace('\r', "\\r").replace('\n', "\\n")
+}
+
+/// A path's `Display` form, safe to print as a standalone output line.
+/// See `escape_line_breaks`.
 pub fn safe_path_display(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace('\r', "\\r")
-        .replace('\n', "\\n")
+    escape_line_breaks(&path.display().to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
