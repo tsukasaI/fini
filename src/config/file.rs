@@ -47,12 +47,9 @@ impl From<toml::de::Error> for ConfigError {
 ///
 /// If `stop_at_git_root` is true, the search only happens at all when
 /// `start_dir` is inside a git repository (has a `.git` ancestor) - outside
-/// one, only `start_dir` itself is checked, never anything above it. Inside
-/// a repo, the walk stops at the directory containing `.git` (inclusive).
-/// Without this, a directory that isn't part of any git repo (e.g. a
-/// project run straight from $HOME) had no bound on the walk at all and
-/// could load a wholly unrelated fini.toml from an arbitrary ancestor,
-/// contrary to the "stops at the git root" contract (issue #86).
+/// one, only `start_dir` itself is checked, never anything above it (issue
+/// #86). Inside a repo, the walk stops at the directory containing `.git`
+/// (inclusive).
 /// Returns `None` if the file is not found.
 pub fn find_file_upward(
     start_dir: &Path,
@@ -158,7 +155,10 @@ mod tests {
     #[test]
     fn test_issue_86() {
         let grandparent = TempDir::new().unwrap();
-        // No .git anywhere in this tree.
+        assert!(
+            !has_git_ancestor(grandparent.path()),
+            "TMPDIR is inside a git repo; this test cannot run here"
+        );
         let unrelated_config = grandparent.path().join("fini.toml");
         fs::write(&unrelated_config, "[normalize]\n").unwrap();
 

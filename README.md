@@ -106,7 +106,9 @@ CLI arguments > `fini.toml` > defaults
 
 ### Config Discovery
 
-Searches upward from current directory, stops at git root.
+Searches upward from current directory, stops at git root. Outside a
+git repository (no `.git` in any ancestor), only the current directory
+is checked.
 
 ### .editorconfig
 
