@@ -28,25 +28,28 @@ pub fn walk_paths(
     let mut canon_parent_cache = HashMap::new();
 
     for path in paths {
-        // A root path argument that is itself a symlink *to a directory* is
-        // followed by WalkBuilder regardless of the default (non-following)
-        // policy that already applies to every symlink found *during* the
-        // walk - the root's own type is read directly, not through an entry
-        // that policy governs. Its target's contents would then be walked
-        // and, in fix mode, rewritten, even though that target can be
-        // entirely outside the tree the user meant to scan (issue #91).
-        // Refuse it, the same way an in-tree symlinked directory is already
-        // refused (issue #85's symlinked-intermediate-directory case) -
-        // unlike a symlink to a *file*, which the walk below already
-        // reports as a walked-but-skipped entry (its own file_type is
-        // symlink, not file, so it's filtered out further down, then
-        // counted and reported as skipped by the caller), this case never
-        // reaches that path because WalkBuilder itself dereferences a
-        // directory-symlink root before any entry filtering runs.
-        let is_symlinked_dir_root = fs::symlink_metadata(path)
+        // A root path argument that is itself a symlink to a directory is
+        // followed by WalkBuilder before any per-entry policy (hidden files,
+        // never-follow-symlink) ever runs, so its target's contents would be
+        // walked and, in fix mode, rewritten, even though that target can be
+        // entirely outside the tree the user meant to scan (issue #91). A
+        // symlink-to-*file* root is unaffected: `ignore` follows a root that
+        // resolves to a file, so it's yielded as a regular file entry and
+        // process_file's own symlink_metadata check reports it as a skipped
+        // symlink, same as any in-tree one.
+        //
+        // A trailing separator (or `/.`) makes lstat resolve through the
+        // symlink - POSIX strips it before the syscall - so `path` itself
+        // isn't a reliable probe; normalize via Components first (this
+        // collapses "link/", "link//" and "link/." to "link", while leaving
+        // a leading "./" alone). The walk and the error message below still
+        // use the as-typed `path`, so reported entries keep their original
+        // shape.
+        let probe = Path::new(path).components().as_path();
+        let is_symlinked_dir_root = fs::symlink_metadata(probe)
             .map(|m| m.is_symlink())
             .unwrap_or(false)
-            && fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+            && fs::metadata(probe).map(|m| m.is_dir()).unwrap_or(false);
         if is_symlinked_dir_root {
             all_files.push(Err(io::Error::other(format!(
                 "{path}: refusing to walk a symlinked directory root (pass its target directly if that's intended)"
@@ -557,6 +560,20 @@ mod tests {
                 .any(|r| matches!(r, Err(e) if e.to_string().contains("symlink"))),
             "the refusal should say why: {results:?}"
         );
+
+        // A trailing separator (or "/.") makes lstat resolve through the
+        // symlink instead of reporting it - the fix must probe a normalized
+        // path, not the literal argument string, or this form bypasses the
+        // refusal entirely.
+        for suffix in ["/", "//", "/."] {
+            let path_with_suffix = format!("{}{suffix}", link.to_string_lossy());
+            let paths = vec![path_with_suffix.clone()];
+            let results: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+            assert!(
+                results.iter().all(|r| r.is_err()),
+                "{path_with_suffix:?} must also be refused, not walked: {results:?}"
+            );
+        }
     }
 
     #[test]
