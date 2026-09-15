@@ -254,10 +254,9 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
                     }
                 } else {
                     // Unconditional header (mirrors file-mode's "Error: <path>"
-                    // in print_check_result): some fix-only transforms - e.g.
-                    // CRLF normalization - fire neither a Problem entry nor a
-                    // print_change_summary_to bullet, so without this stderr
-                    // could otherwise stay empty despite the exit 1.
+                    // in print_check_result) so stderr is never empty on
+                    // exit 1, even for a fix-only transform whose bullet
+                    // print_change_summary_to doesn't cover.
                     let _ = writeln!(stderr, "Error: stdin");
                     if result.has_changes() {
                         let _ = print_change_summary_to(&mut stderr, &input, &result.content);

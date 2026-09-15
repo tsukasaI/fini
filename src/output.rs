@@ -124,24 +124,34 @@ pub fn print_check_result(
     print_problems_to(&mut stdout.lock(), &result.problems).expect("failed to write to stdout");
 }
 
-/// Prints the content-diff-derived summary lines (missing EOF newline, extra
-/// trailing newlines, trailing whitespace) that Normal-mode check output
-/// shows in place of a diff. Shared by file-mode check output (to stdout)
-/// and `--stdin --check` without `--diff` (to stderr, since stdin's stdout
-/// is reserved for normalized content only - issue #38) - both need these
-/// bullets since fix-only problems never populate `result.problems` (issue
-/// #79).
+/// Prints the content-diff-derived summary lines (line endings, missing EOF
+/// newline, extra trailing newlines, trailing whitespace) that Normal-mode
+/// check output shows in place of a diff. Shared by file-mode check output
+/// (to stdout) and `--stdin --check` without `--diff` (to stderr, since
+/// stdin's stdout is reserved for normalized content only - issue #38) -
+/// both need these bullets since fix-only problems never populate
+/// `result.problems` (issue #79).
 pub fn print_change_summary_to<W: Write>(
     w: &mut W,
     original: &str,
     result_content: &str,
 ) -> io::Result<()> {
-    let orig_trimmed = original.trim_end_matches(['\n', '\r']);
-    let orig_trailing_newlines = original[orig_trimmed.len()..]
+    // A lone `\r` is itself a line ending that normalization collapses to
+    // `\n` (see normalize::fix::normalize_line_endings), but str::lines()
+    // doesn't split on it and trim_end_matches(['\n', '\r']) eats it as
+    // trailing "whitespace" — so counting newlines and walking lines against
+    // the raw `original` misattributes a CR-only file's EOF/trailing-
+    // whitespace bullets. Normalize line endings first so those bullets only
+    // fire for a change distinct from the line-ending one reported below
+    // (issue #83).
+    let original_lf = original.replace("\r\n", "\n").replace('\r', "\n");
+
+    let orig_trimmed = original_lf.trim_end_matches('\n');
+    let orig_trailing_newlines = original_lf[orig_trimmed.len()..]
         .chars()
         .filter(|&c| c == '\n')
         .count();
-    let result_trimmed = result_content.trim_end_matches(['\n', '\r']);
+    let result_trimmed = result_content.trim_end_matches('\n');
     let result_trailing_newlines = result_content[result_trimmed.len()..]
         .chars()
         .filter(|&c| c == '\n')
@@ -153,15 +163,11 @@ pub fn print_change_summary_to<W: Write>(
         writeln!(w, "  - extra trailing newline(s) removed")?;
     }
 
-    // CRLF/CR normalization leaves no other trace here: str::lines() already
-    // strips \r on both sides, so none of the bullets below fire for a file
-    // whose only change was its line endings, and the header alone gave no
-    // reason (issue #83).
-    if original.contains('\r') && !result_content.contains('\r') {
+    if original.contains('\r') {
         writeln!(w, "  - CRLF/CR line endings normalized to LF")?;
     }
 
-    for (i, orig_line) in original.lines().enumerate() {
+    for (i, orig_line) in original_lf.lines().enumerate() {
         if orig_line.len() != orig_line.trim_end().len() {
             writeln!(w, "  - trailing whitespace at line {}", i + 1)?;
         }

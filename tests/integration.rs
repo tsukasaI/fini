@@ -1596,9 +1596,7 @@ fn test_stdin_check_fix_only_problem_prints_summary_without_diff() {
 #[test]
 fn test_stdin_check_crlf_only_change_prints_diagnostic() {
     // Regression test for issue #79: CRLF normalization is a fix-only
-    // transform that fires neither a Problem entry (no ProblemKind variant
-    // for it) nor a print_change_summary_to bullet (trailing-newline counts
-    // and trimmed trailing-whitespace lines are unaffected by CRLF->LF), so
+    // transform (no ProblemKind variant for it), so before issue #83's fix
     // it used to leave stderr completely empty despite the exit 1.
     use std::io::Write;
     use std::process::Stdio;
@@ -1621,8 +1619,8 @@ fn test_stdin_check_crlf_only_change_prints_diagnostic() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
     assert!(
-        !stderr.is_empty(),
-        "stderr must not be empty on a CRLF-only check failure"
+        stderr.contains("line endings normalized"),
+        "stderr must explain the CRLF-only check failure: {stderr}"
     );
 }
 
@@ -1866,4 +1864,59 @@ fn test_issue_83() {
         stdout.contains("line endings normalized"),
         "must explain why the file failed --check: {stdout}"
     );
+}
+
+// issue #83 (follow-up): a lone `\r` (old Mac-style line ending, no `\n`)
+// is itself a line ending that normalization collapses, and must not be
+// misreported as "missing EOF newline" / "trailing whitespace" instead of
+// (or alongside) the line-ending bullet.
+#[test]
+fn test_issue_83_lone_cr() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "line1\rline2\r").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("line endings normalized"),
+        "must report the CR line endings: {stdout}"
+    );
+    assert!(
+        !stdout.contains("missing EOF newline"),
+        "the trailing \\r is a line ending, not a missing-newline case: {stdout}"
+    );
+    assert!(
+        !stdout.contains("trailing whitespace"),
+        "the trailing \\r must not be misread as trailing whitespace: {stdout}"
+    );
+}
+
+// issue #83 (follow-up): an already-LF file with real trailing whitespace
+// must not get a spurious line-ending bullet.
+#[test]
+fn test_issue_83_lf_only_no_crlf_bullet() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "line1  \nline2\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("line endings normalized"),
+        "an LF-only file must not get a CRLF bullet: {stdout}"
+    );
+    assert!(stdout.contains("trailing whitespace at line 1"));
 }
