@@ -2135,3 +2135,31 @@ fn test_issue_92_exclude_matches_everything() {
         "an exclude pattern matching everything must not scan silently: {stderr:?}"
     );
 }
+
+// issue #94: --check must not report "trailing whitespace" for a line whose
+// only trailing character is Unicode whitespace the fixer never removes
+// (remove_trailing_whitespace only trims ASCII space and tab).
+#[test]
+fn test_issue_94() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    // U+00A0 (NBSP) trailing the line - not ASCII space/tab.
+    fs::write(&file, "hello\u{a0}\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("trailing whitespace"),
+        "must not claim trailing whitespace for a line fix mode won't change: {stdout:?}"
+    );
+
+    // Confirm the fixer really does leave it untouched, so the check above
+    // is verifying consistency and not just an absence of any report.
+    fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\u{a0}\n");
+}

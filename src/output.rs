@@ -193,7 +193,12 @@ pub fn print_change_summary_to<W: Write>(
     }
 
     for (i, orig_line) in original_lf.lines().enumerate() {
-        if orig_line.len() != orig_line.trim_end().len() {
+        // Must match remove_trailing_whitespace's own trim set (ASCII space
+        // and tab only) - str::trim_end() also strips other Unicode
+        // whitespace (e.g. U+00A0 NBSP), which the fixer never touches, so
+        // using it here reported "trailing whitespace" for lines fix mode
+        // wouldn't actually change (issue #94).
+        if orig_line.len() != orig_line.trim_end_matches([' ', '\t']).len() {
             writeln!(w, "  - trailing whitespace at line {}", i + 1)?;
         }
     }
