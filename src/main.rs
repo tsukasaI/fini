@@ -112,10 +112,6 @@ fn main() -> ExitCode {
         return handle_init();
     }
 
-    if cli.stdin {
-        return handle_stdin(&cli);
-    }
-
     let toml_config = match load_configuration(&cli.config, cli.quiet) {
         Ok(config) => config,
         Err(e) => {
@@ -123,6 +119,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    if cli.stdin {
+        return handle_stdin(&cli, toml_config.as_ref());
+    }
 
     if !cli.quiet {
         check_editorconfig_warnings();
@@ -208,7 +208,7 @@ fn handle_init() -> ExitCode {
     }
 }
 
-fn handle_stdin(cli: &Cli) -> ExitCode {
+fn handle_stdin(cli: &Cli, toml_config: Option<&FiniToml>) -> ExitCode {
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("Error reading stdin: {e}");
@@ -216,7 +216,7 @@ fn handle_stdin(cli: &Cli) -> ExitCode {
     }
 
     let cli_options = build_cli_options(cli);
-    let normalize = merge_normalize_config(&cli_options, None);
+    let normalize = merge_normalize_config(&cli_options, toml_config.map(|c| &c.normalize));
 
     let result = normalize_content(&input, &normalize);
 
