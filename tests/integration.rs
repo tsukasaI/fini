@@ -1920,3 +1920,20 @@ fn test_issue_83_lf_only_no_crlf_bullet() {
     );
     assert!(stdout.contains("trailing whitespace at line 1"));
 }
+
+// issue #84: --init failing (e.g. fini.toml already exists) must exit 2
+// (runtime error), matching the README's exit-code table, not exit 1
+// (which the table reserves for --check finding problems).
+#[test]
+fn test_issue_84() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("fini.toml"), "existing").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--init")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+}

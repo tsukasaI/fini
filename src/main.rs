@@ -204,7 +204,7 @@ fn handle_init() -> ExitCode {
         }
         Err(e) => {
             eprintln!("Error: {e}");
-            ExitCode::from(1)
+            ExitCode::from(2)
         }
     }
 }
