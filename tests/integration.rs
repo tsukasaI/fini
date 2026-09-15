@@ -2069,3 +2069,69 @@ fn test_issue_89() {
         "--diff --quiet must not write the file"
     );
 }
+
+// issue #92: an empty target directory must not exit 0 silently - it should
+// warn that nothing was scanned, so a typo'd path or exclude pattern that
+// filters out everything doesn't look identical to a clean successful run.
+#[test]
+fn test_issue_92() {
+    let dir = TempDir::new().unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "an empty target must not scan silently: {stderr:?}"
+    );
+}
+
+// issue #92 (follow-up): the warning is a security-relevant "you scanned
+// nothing" signal, like the issue #45 secret-detection-disabled warning -
+// --quiet must not hide it either.
+#[test]
+fn test_issue_92_quiet_still_warns() {
+    let dir = TempDir::new().unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--quiet")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "--quiet must not suppress the empty-scan warning: {stderr:?}"
+    );
+}
+
+// issue #92: an --exclude pattern that matches every file in the target
+// must warn the same way an empty directory does.
+#[test]
+fn test_issue_92_exclude_matches_everything() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--exclude")
+        .arg("*")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "an exclude pattern matching everything must not scan silently: {stderr:?}"
+    );
+}

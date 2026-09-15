@@ -90,6 +90,22 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
             }
         }
     }
+
+    // A target that resolves to zero files (an empty directory, or an
+    // --exclude/config exclude pattern that - typo'd or not - matched
+    // everything) otherwise exits 0 with no output at all, indistinguishable
+    // from a successful run over real files (issue #92). Any walk error
+    // already explains an empty result on its own, so this is additive only
+    // when nothing else said why. Not gated on --quiet: a scan that silently
+    // checked nothing is the kind of security-relevant surprise --quiet's
+    // "only report actionable results" intent doesn't cover (same
+    // reasoning as the issue #45 secret-detection-disabled warning).
+    if file_paths.is_empty() && result.errors == 0 {
+        eprintln!(
+            "Warning: no files matched to scan (empty target, or every file was filtered by .gitignore/hidden-file rules or --exclude/config exclude patterns)"
+        );
+    }
+
     let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
     // Process files in fixed-size chunks: within a chunk, read+normalize run in
