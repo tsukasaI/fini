@@ -102,7 +102,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     // reasoning as the issue #45 secret-detection-disabled warning).
     if file_paths.is_empty() && result.errors == 0 {
         eprintln!(
-            "Warning: no files matched to scan (empty target, or --exclude/config exclude patterns matched everything)"
+            "Warning: no files matched to scan (empty target, or every file was filtered by .gitignore/hidden-file rules or --exclude/config exclude patterns)"
         );
     }
 

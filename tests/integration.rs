@@ -2091,6 +2091,28 @@ fn test_issue_92() {
     );
 }
 
+// issue #92 (follow-up): the warning is a security-relevant "you scanned
+// nothing" signal, like the issue #45 secret-detection-disabled warning -
+// --quiet must not hide it either.
+#[test]
+fn test_issue_92_quiet_still_warns() {
+    let dir = TempDir::new().unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--quiet")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "--quiet must not suppress the empty-scan warning: {stderr:?}"
+    );
+}
+
 // issue #92: an --exclude pattern that matches every file in the target
 // must warn the same way an empty directory does.
 #[test]
