@@ -1,8 +1,10 @@
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Walk paths and yield file paths, respecting gitignore and custom exclude patterns.
 ///
@@ -33,7 +35,9 @@ pub fn walk_paths(
             .git_global(true)
             .git_exclude(true);
 
-        if !exclude_patterns.is_empty() {
+        let overrides_built = if exclude_patterns.is_empty() {
+            None
+        } else {
             let mut overrides = OverrideBuilder::new(path);
             for pattern in exclude_patterns {
                 // OverrideBuilder uses inverted ! semantics:
@@ -45,8 +49,9 @@ pub fn walk_paths(
             let built = overrides
                 .build()
                 .map_err(|e| io::Error::other(format!("failed to build exclude patterns: {e}")))?;
-            builder.overrides(built);
-        }
+            builder.overrides(built.clone());
+            Some(built)
+        };
 
         for entry in builder.build() {
             match entry {
@@ -63,9 +68,58 @@ pub fn walk_paths(
                 }
             }
         }
+
+        // issue #85: a file already tracked by git stays tracked even after
+        // it's added to .gitignore (git itself ignores .gitignore for paths
+        // it already tracks) — but the walk above honors .gitignore
+        // unconditionally, so such a file (and any secret in it) was
+        // silently skipped. Re-add tracked files under this path that the
+        // walk excluded, still honoring explicit --exclude/config excludes
+        // (those are a deliberate opt-out, unlike an incidental .gitignore
+        // match).
+        if Path::new(path).is_dir() {
+            for tracked in git_tracked_files_under(Path::new(path)) {
+                if overrides_built
+                    .as_ref()
+                    .is_some_and(|o| o.matched(&tracked, false).is_ignore())
+                {
+                    continue;
+                }
+                if fs::metadata(&tracked).map(|m| m.is_file()).unwrap_or(false)
+                    && seen.insert(dedup_key(&tracked, &mut canon_parent_cache))
+                {
+                    all_files.push(Ok(tracked));
+                }
+            }
+        }
     }
 
     Ok(all_files.into_iter())
+}
+
+/// Lists files tracked by git under `root`, as absolute paths. `git ls-files`
+/// ignores .gitignore entirely for already-tracked paths, so this surfaces
+/// exactly the set the ignore-respecting walk above may have hidden.
+/// Returns an empty vec (not an error) when `root` isn't inside a git
+/// work tree, or `git` isn't installed — this is a best-effort supplement to
+/// the primary walk, not something a missing git should fail the scan over.
+fn git_tracked_files_under(root: &Path) -> Vec<PathBuf> {
+    let output = match Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    output
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| root.join(String::from_utf8_lossy(chunk).as_ref()))
+        .collect()
 }
 
 /// Dedup key for a walked file: the canonicalized parent directory joined
@@ -365,5 +419,106 @@ mod tests {
             entries.iter().any(|r| r.is_err()),
             "permission-denied subdirectory should surface as an Err entry"
         );
+    }
+
+    #[test]
+    fn test_issue_85() {
+        // A file that's already tracked by git stays tracked even after
+        // .gitignore is updated to match it (git only consults .gitignore
+        // for previously-untracked paths) — so the walk must still surface
+        // it, not silently drop it (and any secret it contains) from
+        // scanning.
+        let dir = TempDir::new().unwrap();
+        assert!(Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+
+        let tracked = dir.path().join("tracked.env");
+        fs::write(&tracked, "SECRET=hunter2\n").unwrap();
+        assert!(Command::new("git")
+            .args(["-C"])
+            .arg(dir.path())
+            .args(["add", "tracked.env"])
+            .status()
+            .unwrap()
+            .success());
+
+        // Now ignore it — git keeps tracking it regardless.
+        fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(
+            files.iter().any(|f| f.ends_with("tracked.env")),
+            "a tracked-but-now-gitignored file must still be walked: {files:?}"
+        );
+    }
+
+    #[test]
+    fn test_issue_85_untracked_gitignored_file_still_excluded() {
+        // A file that was never tracked and matches .gitignore must remain
+        // excluded — the fix only rescues already-tracked files.
+        let dir = TempDir::new().unwrap();
+        assert!(Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::write(dir.path().join("ignored.txt"), "never tracked").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[])
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(files
+            .iter()
+            .all(|f| !f.to_string_lossy().contains("ignored.txt")));
+    }
+
+    #[test]
+    fn test_issue_85_explicit_exclude_still_wins_over_tracked_file() {
+        // Explicit --exclude/config excludes are a deliberate opt-out, unlike
+        // an incidental .gitignore match, so they must still suppress an
+        // already-tracked file.
+        let dir = TempDir::new().unwrap();
+        assert!(Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let tracked = dir.path().join("tracked.env");
+        fs::write(&tracked, "SECRET=hunter2\n").unwrap();
+        assert!(Command::new("git")
+            .args(["-C"])
+            .arg(dir.path())
+            .args(["add", "tracked.env"])
+            .status()
+            .unwrap()
+            .success());
+        fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let exclude = vec!["tracked.env".to_string()];
+        let files: Vec<_> = walk_paths(&paths, &exclude)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(files.iter().all(|f| !f.ends_with("tracked.env")));
     }
 }
