@@ -28,6 +28,32 @@ pub fn walk_paths(
     let mut canon_parent_cache = HashMap::new();
 
     for path in paths {
+        // A root path argument that is itself a symlink *to a directory* is
+        // followed by WalkBuilder regardless of the default (non-following)
+        // policy that already applies to every symlink found *during* the
+        // walk - the root's own type is read directly, not through an entry
+        // that policy governs. Its target's contents would then be walked
+        // and, in fix mode, rewritten, even though that target can be
+        // entirely outside the tree the user meant to scan (issue #91).
+        // Refuse it, the same way an in-tree symlinked directory is already
+        // refused (issue #85's symlinked-intermediate-directory case) -
+        // unlike a symlink to a *file*, which the walk below already
+        // reports as a walked-but-skipped entry (its own file_type is
+        // symlink, not file, so it's filtered out further down, then
+        // counted and reported as skipped by the caller), this case never
+        // reaches that path because WalkBuilder itself dereferences a
+        // directory-symlink root before any entry filtering runs.
+        let is_symlinked_dir_root = fs::symlink_metadata(path)
+            .map(|m| m.is_symlink())
+            .unwrap_or(false)
+            && fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+        if is_symlinked_dir_root {
+            all_files.push(Err(io::Error::other(format!(
+                "{path}: refusing to walk a symlinked directory root (pass its target directly if that's intended)"
+            ))));
+            continue;
+        }
+
         let mut builder = WalkBuilder::new(path);
         builder
             .hidden(true)
@@ -499,6 +525,37 @@ mod tests {
             files.len(),
             2,
             "a symlink root and its target are distinct paths, not duplicates: {files:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_issue_91() {
+        // A root path argument that is itself a symlink to a directory must
+        // not be followed: WalkBuilder dereferences the root's own type
+        // directly (unlike a nested symlink, which the walk already skips),
+        // so an unguarded symlink root would have its target's files walked
+        // and, in fix mode, rewritten - even though that target can be
+        // entirely outside the tree the user meant to scan.
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.txt"), "hello").unwrap();
+
+        let container = TempDir::new().unwrap();
+        let link = container.path().join("link");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let paths = vec![link.to_string_lossy().to_string()];
+        let results: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+
+        assert!(
+            results.iter().all(|r| r.is_err()),
+            "a symlinked directory root must be refused, not walked: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r, Err(e) if e.to_string().contains("symlink"))),
+            "the refusal should say why: {results:?}"
         );
     }
 
