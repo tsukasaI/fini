@@ -44,7 +44,10 @@ pub fn walk_paths(
         // collapses "link/", "link//" and "link/." to "link", while leaving
         // a leading "./" alone). The walk and the error message below still
         // use the as-typed `path`, so reported entries keep their original
-        // shape.
+        // shape. Out of scope here: a root that *traverses* a symlink
+        // component ("link/sub", "link/..") rather than naming one directly
+        // - Components doesn't collapse `..`, and this check only guards
+        // the root argument itself.
         let probe = Path::new(path).components().as_path();
         let is_symlinked_dir_root = fs::symlink_metadata(probe)
             .map(|m| m.is_symlink())
@@ -572,6 +575,12 @@ mod tests {
             assert!(
                 results.iter().all(|r| r.is_err()),
                 "{path_with_suffix:?} must also be refused, not walked: {results:?}"
+            );
+            assert!(
+                results
+                    .iter()
+                    .any(|r| matches!(r, Err(e) if e.to_string().contains("symlink"))),
+                "{path_with_suffix:?}: refusal should say why, not just any walk error: {results:?}"
             );
         }
     }
