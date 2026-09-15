@@ -159,7 +159,11 @@ fn main() -> ExitCode {
         toml_config.as_ref().and_then(|c| c.exclude.as_deref()),
     );
 
-    let mask_secrets = normalize.detect_secrets;
+    // Diff masking is a defense-in-depth output guarantee, not a detection
+    // feature: a repo-local fini.toml turning off *detection* (allowed, but
+    // never silent - see the warning above) must not also turn off masking
+    // a secret's raw value out of --diff output (issue #93).
+    let mask_secrets = true;
     let config = Config {
         check_only: cli.check,
         output_mode,
@@ -238,14 +242,14 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
                 // stderr must not mask the check failure exit code.
                 let mut stderr = io::stderr().lock();
                 if cli.diff {
-                    let (orig, new): (Cow<str>, Cow<str>) = if normalize.detect_secrets {
-                        (
-                            Cow::Owned(mask_secret_lines(&input)),
-                            Cow::Owned(mask_secret_lines(&result.content)),
-                        )
-                    } else {
-                        (Cow::Borrowed(&input), Cow::Borrowed(&result.content))
-                    };
+                    // Always masked, regardless of whether detect_secrets is
+                    // enabled: masking is an output guarantee independent of
+                    // the detection feature it happens to share patterns
+                    // with (issue #93).
+                    let (orig, new): (Cow<str>, Cow<str>) = (
+                        Cow::Owned(mask_secret_lines(&input)),
+                        Cow::Owned(mask_secret_lines(&result.content)),
+                    );
                     // Skip the diff header when there's nothing to show a
                     // diff of - either no content change, or masking
                     // collapsed the only change (a secret line) to identical
