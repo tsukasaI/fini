@@ -112,10 +112,6 @@ fn main() -> ExitCode {
         return handle_init();
     }
 
-    if cli.stdin {
-        return handle_stdin(&cli);
-    }
-
     let toml_config = match load_configuration(&cli.config, cli.quiet) {
         Ok(config) => config,
         Err(e) => {
@@ -123,10 +119,6 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-
-    if !cli.quiet {
-        check_editorconfig_warnings();
-    }
 
     let cli_options = build_cli_options(&cli);
 
@@ -139,9 +131,18 @@ fn main() -> ExitCode {
     // controls. merge_normalize_config's precedence is CLI > TOML > default(true),
     // so the merged result can only be false here if TOML set it to false and
     // the CLI didn't ask to disable it - checking the merge output instead of
-    // re-inspecting toml_config directly.
+    // re-inspecting toml_config directly. This applies to --stdin too (issue
+    // #80 gave stdin a config file to disable it with in the first place).
     if !normalize.detect_secrets && !cli.no_detect_secrets {
         eprintln!("Warning: config file disables secret detection (detect_secrets = false)");
+    }
+
+    if cli.stdin {
+        return handle_stdin(&cli, &normalize);
+    }
+
+    if !cli.quiet {
+        check_editorconfig_warnings();
     }
 
     let output_mode = if cli.quiet {
@@ -208,17 +209,14 @@ fn handle_init() -> ExitCode {
     }
 }
 
-fn handle_stdin(cli: &Cli) -> ExitCode {
+fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("Error reading stdin: {e}");
         return ExitCode::from(2);
     }
 
-    let cli_options = build_cli_options(cli);
-    let normalize = merge_normalize_config(&cli_options, None);
-
-    let result = normalize_content(&input, &normalize);
+    let result = normalize_content(&input, normalize);
 
     // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
     for problem in &result.suppressed {

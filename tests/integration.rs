@@ -1738,3 +1738,109 @@ fn test_issue_78_mixed_fix_and_detection() {
         "TODO detection must not be dropped just because the file was also fixed: {stdout}"
     );
 }
+
+// issue #80: --stdin must apply fini.toml discovered from the cwd (and
+// --config, if given), same as file mode. Previously stdin mode never
+// loaded any config at all.
+#[test]
+fn test_issue_80() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\nfix_code_blocks = true\n",
+    )
+    .unwrap();
+
+    let mut child = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"```rust\nfn main() {}\n```\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout, "fn main() {}\n",
+        "fix_code_blocks from the discovered fini.toml must apply to --stdin: {stdout}"
+    );
+}
+
+// issue #80: --stdin must also honor an explicit --config path.
+#[test]
+fn test_issue_80_explicit_config() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("custom.toml");
+    fs::write(&config_path, "[normalize]\nfix_code_blocks = true\n").unwrap();
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--config")
+        .arg(config_path.to_str().unwrap())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"```rust\nfn main() {}\n```\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "fn main() {}\n");
+}
+
+// issue #80 (follow-up): the issue #45 security-posture warning must still
+// fire when the TOML that disables secret detection reaches --stdin through
+// the same config-loading path this issue added.
+#[test]
+fn test_issue_80_stdin_warns_when_config_disables_secret_detection() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\ndetect_secrets = false\n",
+    )
+    .unwrap();
+
+    let mut child = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--stdin")
+        .arg("--quiet")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"hello\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("disables secret detection"),
+        "missing security-posture warning on --stdin, even under --quiet: {stderr}"
+    );
+}
