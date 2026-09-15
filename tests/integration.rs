@@ -1709,3 +1709,32 @@ fn test_issue_78() {
         "must show the TODO detection instead of silently dropping it: {stdout}"
     );
 }
+
+// issue #78 (follow-up): a file that gets an auto-fix AND has a
+// detection-only problem must show both "Fixed:" and the detection — not
+// just the fix.
+#[test]
+fn test_issue_78_mixed_fix_and_detection() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("mixed.txt");
+    // Trailing whitespace triggers an auto-fix; the TODO is detection-only.
+    fs::write(&file, "some code   \n// TODO: fix this later\n").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(output.status.success());
+
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "some code\n// TODO: fix this later\n"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Fixed:"),
+        "file was rewritten and should say so: {stdout}"
+    );
+    assert!(
+        stdout.contains("TODO comment"),
+        "TODO detection must not be dropped just because the file was also fixed: {stdout}"
+    );
+}

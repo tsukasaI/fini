@@ -248,18 +248,31 @@ pub fn print_fix_result(
                     path.display()
                 );
             } else {
-                // Detection-only file: nothing was rewritten, but problems
-                // (TODOs, debug code, secrets) still exist and must be shown
-                // here — fix mode never fails on them (see README), so this
-                // list is the only way they're surfaced (issue #78).
+                // Nothing was rewritten, so the file only has detection-only
+                // problems (TODOs, debug code, secrets) — label it distinctly
+                // from a rewritten file.
                 println!(
                     "{}Detected:{} {}",
                     ctx.colors.warning,
                     ctx.colors.reset(),
                     path.display()
                 );
+            }
+
+            // Detection-only problems (TODOs, debug code, secrets) never
+            // change result.content, so a fix that also rewrote the file
+            // (has_changes() true) must still surface them here — fix mode
+            // never fails on them (see README), so this list is the only way
+            // they're reported (issue #78).
+            let detections: Vec<Problem> = result
+                .problems
+                .iter()
+                .filter(|p| p.kind.is_detection_only())
+                .cloned()
+                .collect();
+            if !detections.is_empty() {
                 let stdout = io::stdout();
-                print_problems_to(&mut stdout.lock(), &result.problems)
+                print_problems_to(&mut stdout.lock(), &detections)
                     .expect("failed to write to stdout");
             }
         }
