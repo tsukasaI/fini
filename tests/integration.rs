@@ -1938,3 +1938,109 @@ fn test_issue_84() {
 
     assert_eq!(output.status.code(), Some(2));
 }
+
+// issue #87: a filename containing a newline must not forge extra output
+// lines — --quiet mode's contract is one path per line, and a crafted
+// filename could otherwise spoof a fake result line for a different file.
+#[cfg(unix)]
+#[test]
+fn test_issue_87() {
+    let dir = TempDir::new().unwrap();
+    let evil_name = "evil\nFixed: not_a_real_file.txt";
+    let file = dir.path().join(evil_name);
+    fs::write(&file, "hello").unwrap(); // missing EOF newline, so it's "fixed"
+
+    let output = fini_cmd()
+        .arg("--quiet")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "the embedded newline must not produce a second output line: {stdout:?}"
+    );
+    assert!(
+        lines[0].contains("evil\\nFixed"),
+        "the newline must be escaped, not printed literally: {stdout:?}"
+    );
+}
+
+// issue #87 (follow-up): the diff header ("--- <path>" / "+++ <path>") must
+// also be a single, escaped line, not just Quiet-mode output.
+#[cfg(unix)]
+#[test]
+fn test_issue_87_diff_header() {
+    let dir = TempDir::new().unwrap();
+    let evil_name = "evil\nFixed: not_a_real_file.txt";
+    let file = dir.path().join(evil_name);
+    fs::write(&file, "hello").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let header_lines = stdout.lines().filter(|l| l.starts_with("--- ")).count();
+    assert_eq!(
+        header_lines, 1,
+        "the embedded newline in the diff header must not add a header line: {stdout:?}"
+    );
+    assert!(stdout.contains("evil\\nFixed"), "{stdout:?}");
+}
+
+// issue #87 (follow-up): a per-entry walk error (e.g. permission denied)
+// embeds the offending path in its Display text, which by the time it
+// reaches "Error walking path: ..." is already a flattened String, not a
+// Path — that message must still be escaped, not just safe_path_display's
+// direct callers.
+#[cfg(unix)]
+#[test]
+fn test_issue_87_walk_error_message() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let blocked = dir.path().join("evil\nFixed: not_a_real_file.txt");
+    fs::create_dir(&blocked).unwrap();
+    fs::write(blocked.join("inner.txt"), "content").unwrap();
+    fs::write(dir.path().join("good.txt"), "hello\n").unwrap();
+
+    let mut perms = fs::metadata(&blocked).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&blocked, perms.clone()).unwrap();
+
+    let output = fini_cmd()
+        .arg("--quiet")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    perms.set_mode(0o755);
+    fs::set_permissions(&blocked, perms).unwrap();
+
+    // Running as root ignores the 000 permission, which would make the loop
+    // below pass on empty stderr instead of actually exercising the fix.
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected a walk error (permission denied); stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("evil\\nFixed"), "{stderr:?}");
+    for line in stderr.lines() {
+        assert!(
+            line.starts_with("Error walking path:"),
+            "the embedded newline must not forge an unrelated-looking stderr line: {stderr:?}"
+        );
+    }
+}

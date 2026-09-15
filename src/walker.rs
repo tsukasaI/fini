@@ -189,7 +189,7 @@ fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
             if has_git_ancestor(root) {
                 eprintln!(
                     "Warning: could not run git ({e}); tracked-but-gitignored files under {} were not rescanned",
-                    root.display()
+                    crate::output::safe_path_display(root)
                 );
             }
             return Vec::new();
@@ -199,8 +199,8 @@ fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
         if has_git_ancestor(root) {
             eprintln!(
                 "Warning: `git ls-files` failed in {}: {} (tracked-but-gitignored files there were not rescanned)",
-                root.display(),
-                String::from_utf8_lossy(&output.stderr).trim()
+                crate::output::safe_path_display(root),
+                crate::output::escape_line_breaks(String::from_utf8_lossy(&output.stderr).trim())
             );
         }
         return Vec::new();
