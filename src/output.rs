@@ -153,6 +153,14 @@ pub fn print_change_summary_to<W: Write>(
         writeln!(w, "  - extra trailing newline(s) removed")?;
     }
 
+    // CRLF/CR normalization leaves no other trace here: str::lines() already
+    // strips \r on both sides, so none of the bullets below fire for a file
+    // whose only change was its line endings, and the header alone gave no
+    // reason (issue #83).
+    if original.contains('\r') && !result_content.contains('\r') {
+        writeln!(w, "  - CRLF/CR line endings normalized to LF")?;
+    }
+
     for (i, orig_line) in original.lines().enumerate() {
         if orig_line.len() != orig_line.trim_end().len() {
             writeln!(w, "  - trailing whitespace at line {}", i + 1)?;

@@ -1844,3 +1844,26 @@ fn test_issue_80_stdin_warns_when_config_disables_secret_detection() {
         "missing security-posture warning on --stdin, even under --quiet: {stderr}"
     );
 }
+
+// issue #83: --check must print a reason line when the only change is line
+// ending normalization (CRLF/CR -> LF), not just the bare "Error: <path>"
+// header with nothing under it.
+#[test]
+fn test_issue_83() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "line1\r\nline2\r\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("line endings normalized"),
+        "must explain why the file failed --check: {stdout}"
+    );
+}
