@@ -45,13 +45,25 @@ impl From<toml::de::Error> for ConfigError {
 
 /// Search upward from `start_dir` for a file with the given name.
 ///
-/// If `stop_at_git_root` is true, stops searching when a `.git` directory is found.
+/// If `stop_at_git_root` is true, the search only happens at all when
+/// `start_dir` is inside a git repository (has a `.git` ancestor) - outside
+/// one, only `start_dir` itself is checked, never anything above it. Inside
+/// a repo, the walk stops at the directory containing `.git` (inclusive).
+/// Without this, a directory that isn't part of any git repo (e.g. a
+/// project run straight from $HOME) had no bound on the walk at all and
+/// could load a wholly unrelated fini.toml from an arbitrary ancestor,
+/// contrary to the "stops at the git root" contract (issue #86).
 /// Returns `None` if the file is not found.
 pub fn find_file_upward(
     start_dir: &Path,
     filename: &str,
     stop_at_git_root: bool,
 ) -> Option<PathBuf> {
+    if stop_at_git_root && !has_git_ancestor(start_dir) {
+        let file_path = start_dir.join(filename);
+        return file_path.exists().then_some(file_path);
+    }
+
     let mut current = start_dir.to_path_buf();
 
     loop {
@@ -66,6 +78,18 @@ pub fn find_file_upward(
 
         if !current.pop() {
             return None;
+        }
+    }
+}
+
+fn has_git_ancestor(start_dir: &Path) -> bool {
+    let mut current = start_dir.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return true;
+        }
+        if !current.pop() {
+            return false;
         }
     }
 }
@@ -105,6 +129,7 @@ mod tests {
     #[test]
     fn test_find_config_in_parent_dir() {
         let parent = TempDir::new().unwrap();
+        fs::create_dir(parent.path().join(".git")).unwrap();
         let config_path = parent.path().join("fini.toml");
         fs::write(&config_path, "[normalize]\n").unwrap();
 
@@ -125,6 +150,25 @@ mod tests {
 
         let found = find_config_file(&subdir);
         assert_eq!(found, None);
+    }
+
+    // issue #86: outside a git repo, discovery must not walk upward at all
+    // (past `start_dir` itself), so it can never pick up an unrelated
+    // ancestor's fini.toml just because nothing stopped the walk.
+    #[test]
+    fn test_issue_86() {
+        let grandparent = TempDir::new().unwrap();
+        // No .git anywhere in this tree.
+        let unrelated_config = grandparent.path().join("fini.toml");
+        fs::write(&unrelated_config, "[normalize]\n").unwrap();
+
+        let parent = grandparent.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        let child = parent.join("child");
+        fs::create_dir(&child).unwrap();
+
+        assert_eq!(find_config_file(&child), None);
+        assert_eq!(find_config_file(&parent), None);
     }
 
     #[test]
