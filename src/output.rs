@@ -239,12 +239,29 @@ pub fn print_fix_result(
                     problem.line
                 );
             }
-            println!(
-                "{}Fixed:{} {}",
-                ctx.colors.success,
-                ctx.colors.reset(),
-                path.display()
-            );
+
+            if result.has_changes() {
+                println!(
+                    "{}Fixed:{} {}",
+                    ctx.colors.success,
+                    ctx.colors.reset(),
+                    path.display()
+                );
+            } else {
+                // Detection-only file: nothing was rewritten, but problems
+                // (TODOs, debug code, secrets) still exist and must be shown
+                // here — fix mode never fails on them (see README), so this
+                // list is the only way they're surfaced (issue #78).
+                println!(
+                    "{}Detected:{} {}",
+                    ctx.colors.warning,
+                    ctx.colors.reset(),
+                    path.display()
+                );
+                let stdout = io::stdout();
+                print_problems_to(&mut stdout.lock(), &result.problems)
+                    .expect("failed to write to stdout");
+            }
         }
     }
 }

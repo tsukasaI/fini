@@ -1673,3 +1673,39 @@ fn test_stdin_check_diff_masked_to_no_diff_omits_diff_header() {
         "secret hint missing from stderr: {stderr}"
     );
 }
+
+// issue #78: fix mode (without --check) must not print "Fixed:" for a file
+// that had no auto-fixable changes but does have detection-only problems
+// (TODO/FIXME/debug/secret) — and must show those problems, not silently
+// drop them.
+#[test]
+fn test_issue_78() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    // Already normalized (no line-ending/whitespace/EOF fixes needed), but
+    // contains a TODO marker, which is detection-only.
+    fs::write(&file, "// TODO: fix this later\n").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(output.status.success());
+
+    // File content must be unchanged.
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "// TODO: fix this later\n"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Fixed:"),
+        "must not claim the file was fixed: {stdout}"
+    );
+    assert!(
+        stdout.contains("Detected:"),
+        "must report the detection-only file: {stdout}"
+    );
+    assert!(
+        stdout.contains("TODO comment"),
+        "must show the TODO detection instead of silently dropping it: {stdout}"
+    );
+}
