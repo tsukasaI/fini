@@ -321,7 +321,8 @@ fn test_init_fails_if_config_exists() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    // issue #84: --init failure is a runtime error (exit 2), not exit 1.
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]
