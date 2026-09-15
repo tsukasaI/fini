@@ -2044,3 +2044,28 @@ fn test_issue_87_walk_error_message() {
         );
     }
 }
+
+// issue #89: --diff --quiet must not write files. --quiet alone selects
+// Quiet display, which previously made should_write() see output_mode !=
+// Diff and write anyway, silently overriding --diff's no-write guarantee.
+#[test]
+fn test_issue_89() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    let original = "hello"; // missing EOF newline
+    fs::write(&file, original).unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg("--quiet")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        original,
+        "--diff --quiet must not write the file"
+    );
+}
