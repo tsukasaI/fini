@@ -28,6 +28,38 @@ pub fn walk_paths(
     let mut canon_parent_cache = HashMap::new();
 
     for path in paths {
+        // A root path argument that is itself a symlink to a directory is
+        // followed by WalkBuilder before any per-entry policy (hidden files,
+        // never-follow-symlink) ever runs, so its target's contents would be
+        // walked and, in fix mode, rewritten, even though that target can be
+        // entirely outside the tree the user meant to scan (issue #91). A
+        // symlink-to-*file* root is unaffected: `ignore` follows a root that
+        // resolves to a file, so it's yielded as a regular file entry and
+        // process_file's own symlink_metadata check reports it as a skipped
+        // symlink, same as any in-tree one.
+        //
+        // A trailing separator (or `/.`) makes lstat resolve through the
+        // symlink - POSIX strips it before the syscall - so `path` itself
+        // isn't a reliable probe; normalize via Components first (this
+        // collapses "link/", "link//" and "link/." to "link", while leaving
+        // a leading "./" alone). The walk and the error message below still
+        // use the as-typed `path`, so reported entries keep their original
+        // shape. Out of scope here: a root that *traverses* a symlink
+        // component ("link/sub", "link/..") rather than naming one directly
+        // - Components doesn't collapse `..`, and this check only guards
+        // the root argument itself.
+        let probe = Path::new(path).components().as_path();
+        let is_symlinked_dir_root = fs::symlink_metadata(probe)
+            .map(|m| m.is_symlink())
+            .unwrap_or(false)
+            && fs::metadata(probe).map(|m| m.is_dir()).unwrap_or(false);
+        if is_symlinked_dir_root {
+            all_files.push(Err(io::Error::other(format!(
+                "{path}: refusing to walk a symlinked directory root (pass its target directly if that's intended)"
+            ))));
+            continue;
+        }
+
         let mut builder = WalkBuilder::new(path);
         builder
             .hidden(true)
@@ -500,6 +532,57 @@ mod tests {
             2,
             "a symlink root and its target are distinct paths, not duplicates: {files:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_issue_91() {
+        // A root path argument that is itself a symlink to a directory must
+        // not be followed: WalkBuilder dereferences the root's own type
+        // directly (unlike a nested symlink, which the walk already skips),
+        // so an unguarded symlink root would have its target's files walked
+        // and, in fix mode, rewritten - even though that target can be
+        // entirely outside the tree the user meant to scan.
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.txt"), "hello").unwrap();
+
+        let container = TempDir::new().unwrap();
+        let link = container.path().join("link");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let paths = vec![link.to_string_lossy().to_string()];
+        let results: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+
+        assert!(
+            results.iter().all(|r| r.is_err()),
+            "a symlinked directory root must be refused, not walked: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r, Err(e) if e.to_string().contains("symlink"))),
+            "the refusal should say why: {results:?}"
+        );
+
+        // A trailing separator (or "/.") makes lstat resolve through the
+        // symlink instead of reporting it - the fix must probe a normalized
+        // path, not the literal argument string, or this form bypasses the
+        // refusal entirely.
+        for suffix in ["/", "//", "/."] {
+            let path_with_suffix = format!("{}{suffix}", link.to_string_lossy());
+            let paths = vec![path_with_suffix.clone()];
+            let results: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+            assert!(
+                results.iter().all(|r| r.is_err()),
+                "{path_with_suffix:?} must also be refused, not walked: {results:?}"
+            );
+            assert!(
+                results
+                    .iter()
+                    .any(|r| matches!(r, Err(e) if e.to_string().contains("symlink"))),
+                "{path_with_suffix:?}: refusal should say why, not just any walk error: {results:?}"
+            );
+        }
     }
 
     #[test]
