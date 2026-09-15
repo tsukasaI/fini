@@ -33,6 +33,13 @@ pub enum OutputMode {
 pub struct Config {
     pub check_only: bool,
     pub output_mode: OutputMode,
+    /// Whether `--diff` was passed on the CLI. Tracked separately from
+    /// `output_mode` because `--diff --quiet` together resolve to
+    /// `OutputMode::Quiet` (quiet display wins), and `should_write` must
+    /// still honor `--diff`'s no-write guarantee in that combination -
+    /// deriving "is this a diff preview" from `output_mode == Diff` alone
+    /// let `--quiet` silently re-enable writes (issue #89).
+    pub diff: bool,
     pub normalize: NormalizeConfig,
     pub exclude_patterns: Vec<String>,
 }
@@ -44,7 +51,7 @@ impl Config {
     /// the README ("Preview changes") and must not write either.
     #[must_use]
     pub fn should_write(&self) -> bool {
-        !self.check_only && self.output_mode != OutputMode::Diff
+        !self.check_only && !self.diff
     }
 }
 

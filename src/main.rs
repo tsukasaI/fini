@@ -163,6 +163,7 @@ fn main() -> ExitCode {
     let config = Config {
         check_only: cli.check,
         output_mode,
+        diff: cli.diff,
         normalize,
         exclude_patterns,
     };
