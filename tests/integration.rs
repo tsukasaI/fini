@@ -1673,3 +1673,68 @@ fn test_stdin_check_diff_masked_to_no_diff_omits_diff_header() {
         "secret hint missing from stderr: {stderr}"
     );
 }
+
+// issue #78: fix mode (without --check) must not print "Fixed:" for a file
+// that had no auto-fixable changes but does have detection-only problems
+// (TODO/FIXME/debug/secret) — and must show those problems, not silently
+// drop them.
+#[test]
+fn test_issue_78() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    // Already normalized (no line-ending/whitespace/EOF fixes needed), but
+    // contains a TODO marker, which is detection-only.
+    fs::write(&file, "// TODO: fix this later\n").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(output.status.success());
+
+    // File content must be unchanged.
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "// TODO: fix this later\n"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Fixed:"),
+        "must not claim the file was fixed: {stdout}"
+    );
+    assert!(
+        stdout.contains("Detected:"),
+        "must report the detection-only file: {stdout}"
+    );
+    assert!(
+        stdout.contains("TODO comment"),
+        "must show the TODO detection instead of silently dropping it: {stdout}"
+    );
+}
+
+// issue #78 (follow-up): a file that gets an auto-fix AND has a
+// detection-only problem must show both "Fixed:" and the detection — not
+// just the fix.
+#[test]
+fn test_issue_78_mixed_fix_and_detection() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("mixed.txt");
+    // Trailing whitespace triggers an auto-fix; the TODO is detection-only.
+    fs::write(&file, "some code   \n// TODO: fix this later\n").unwrap();
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(output.status.success());
+
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "some code\n// TODO: fix this later\n"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Fixed:"),
+        "file was rewritten and should say so: {stdout}"
+    );
+    assert!(
+        stdout.contains("TODO comment"),
+        "TODO detection must not be dropped just because the file was also fixed: {stdout}"
+    );
+}
