@@ -89,10 +89,12 @@ fn is_valid_marker(line: &str, marker: &str) -> bool {
     for i in 0..bytes.len().saturating_sub(mlen - 1) {
         if bytes[i..i + mlen].eq_ignore_ascii_case(marker.as_bytes()) {
             let after = bytes.get(i + mlen).copied();
-            return matches!(
+            if matches!(
                 after,
                 Some(b':') | Some(b' ') | Some(b'\t') | Some(b'(') | None
-            );
+            ) {
+                return true;
+            }
         }
     }
     false
@@ -547,5 +549,22 @@ mod tests {
         assert!(is_valid_marker("// TODO(me)", "TODO"));
         assert!(is_valid_marker("TODO", "TODO"));
         assert!(!is_valid_marker("TODOLIST", "TODO"));
+    }
+
+    // issue #75: an earlier invalid substring match (e.g. "TODOLIST") must not
+    // stop the scan before a later, valid marker on the same line.
+    #[test]
+    fn test_issue_75() {
+        assert!(is_valid_marker("TODOLIST TODO: fix", "TODO"));
+
+        let content = "// TODOLIST TODO: fix this\n";
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].line, 1);
+
+        let content = "// FIXMELIST FIXME: broken\n";
+        let (_, fixmes) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        assert_eq!(fixmes.len(), 1);
+        assert_eq!(fixmes[0].line, 1);
     }
 }
