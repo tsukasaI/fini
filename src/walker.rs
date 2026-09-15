@@ -3,7 +3,7 @@ use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 /// Walk paths and yield file paths, respecting gitignore and custom exclude patterns.
@@ -83,6 +83,17 @@ pub fn walk_paths(
         let root = Path::new(path);
         if root.is_dir() {
             for rel in git_tracked_files_relative(root) {
+                // `git ls-files` prints index entries verbatim — git
+                // validates a path when it's added, not when the index is
+                // read back, so a hand-crafted .git/index (a shipped tarball,
+                // not a clone) could contain an absolute path or a `..`
+                // component. root.join() on such a path would discard root
+                // entirely, so reject anything but plain path components
+                // before it's ever joined.
+                if !is_plain_relative_path(&rel) {
+                    continue;
+                }
+
                 // Mirrors builder.hidden(true): skip any path with a
                 // dotfile/dotdir component.
                 if rel
@@ -93,6 +104,14 @@ pub fn walk_paths(
                 }
 
                 let abs = root.join(&rel);
+
+                // Cheap dedup check first: the vast majority of tracked
+                // files were already found by the primary walk, so skip the
+                // lstat-per-ancestor work below for those.
+                let key = dedup_key(&abs, &mut canon_parent_cache);
+                if seen.contains(&key) {
+                    continue;
+                }
 
                 // A directory-level exclude (e.g. "vendor/") prunes the
                 // directory in the primary walk before any file under it is
@@ -123,10 +142,6 @@ pub fn walk_paths(
                 // symlink_metadata (not metadata): the primary walk never
                 // follows symlinks into content outside the tree (issue
                 // #35), so this rescue must not either.
-                let key = dedup_key(&abs, &mut canon_parent_cache);
-                if seen.contains(&key) {
-                    continue;
-                }
                 let is_file = fs::symlink_metadata(&abs)
                     .map(|m| m.is_file())
                     .unwrap_or(false);
@@ -199,6 +214,14 @@ fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// True if every component of `rel` is a plain path segment — no root
+/// prefix, no `.`/`..`. `git ls-files` output isn't guaranteed to satisfy
+/// this (git validates a path on `add`, not on reading the index back), and
+/// `root.join(rel)` on a rejected path would silently discard `root`.
+fn is_plain_relative_path(rel: &Path) -> bool {
+    rel.components().all(|c| matches!(c, Component::Normal(_)))
+}
+
 /// Filesystem-only check for a `.git` entry (directory, or the file a
 /// worktree/submodule uses) in `root` or any ancestor — used to decide
 /// whether a git failure deserves a warning, without depending on git
@@ -213,7 +236,7 @@ fn has_git_ancestor(root: &Path) -> bool {
         // HEAD (present for both a normal repo and a worktree's `.git` file
         // pointing elsewhere) rather than bare existence.
         let git_entry = dir.join(".git");
-        git_entry.join("HEAD").exists() || (git_entry.is_file() && git_entry.exists())
+        git_entry.join("HEAD").exists() || git_entry.is_file()
     })
 }
 
@@ -797,5 +820,20 @@ mod tests {
                 .all(|f| !f.to_string_lossy().contains("tracked.txt")),
             "must never descend through a symlinked intermediate directory: {files:?}"
         );
+    }
+
+    #[test]
+    fn test_issue_85_rejects_absolute_or_dotdot_tracked_paths() {
+        // `git ls-files` prints whatever's in the index verbatim, and git
+        // only validates a path when it's added, not when the index is read
+        // back — a hand-crafted .git/index (a shipped tarball, not a real
+        // clone) could contain an absolute path or a `..` component.
+        // root.join() on such a path would discard root entirely, letting
+        // the rescue write outside the walked tree.
+        assert!(is_plain_relative_path(Path::new("src/main.rs")));
+        assert!(!is_plain_relative_path(Path::new("/etc/passwd")));
+        assert!(!is_plain_relative_path(Path::new("../outside.txt")));
+        assert!(!is_plain_relative_path(Path::new("a/../../outside.txt")));
+        assert!(!is_plain_relative_path(Path::new("./a.txt")));
     }
 }
