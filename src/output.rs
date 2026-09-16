@@ -60,24 +60,15 @@ pub struct OutputContext {
     pub colors: Colors,
     pub verbose: bool,
     pub show_progress: bool,
-    /// Mask secret-matching lines in diff output (mirrors detect_secrets)
-    pub mask_secrets: bool,
 }
 
 impl OutputContext {
-    pub fn new(
-        mode: OutputMode,
-        use_colors: bool,
-        verbose: bool,
-        show_progress: bool,
-        mask_secrets: bool,
-    ) -> Self {
+    pub fn new(mode: OutputMode, use_colors: bool, verbose: bool, show_progress: bool) -> Self {
         Self {
             mode,
             colors: Colors::new(use_colors),
             verbose,
             show_progress,
-            mask_secrets,
         }
     }
 }
@@ -126,7 +117,7 @@ pub fn print_check_result(
         // there IS a content diff, skip the empty `---`/`+++` header instead
         // of printing a diff with no body.
         if result.has_changes() {
-            let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
+            let (orig, new) = masked_pair(original, &result.content);
             print_diff(&safe_path_display(path), &orig, &new);
         }
     } else {
@@ -261,7 +252,7 @@ pub fn print_fix_result(
     match ctx.mode {
         OutputMode::Quiet => println!("{}", safe_path_display(path)),
         OutputMode::Diff => {
-            let (orig, new) = masked_pair(original, &result.content, ctx.mask_secrets);
+            let (orig, new) = masked_pair(original, &result.content);
             print_diff(&safe_path_display(path), &orig, &new);
         }
         OutputMode::Normal => {
@@ -345,19 +336,14 @@ pub fn print_skipped(path: &Path, reason: &str, ctx: &OutputContext) {
 
 /// Mask secret-matching lines on both sides of a diff before printing, so the
 /// diff path honors the same hint-only contract as check output (issue #44).
-fn masked_pair<'a>(
-    original: &'a str,
-    content: &'a str,
-    mask: bool,
-) -> (Cow<'a, str>, Cow<'a, str>) {
-    if mask {
-        (
-            Cow::Owned(mask_secret_lines(original)),
-            Cow::Owned(mask_secret_lines(content)),
-        )
-    } else {
-        (Cow::Borrowed(original), Cow::Borrowed(content))
-    }
+/// Unconditional: masking is an output guarantee independent of whether
+/// secret *detection* is enabled (issue #93), so there's no caller-supplied
+/// toggle here to accidentally disable it.
+fn masked_pair<'a>(original: &'a str, content: &'a str) -> (Cow<'a, str>, Cow<'a, str>) {
+    (
+        Cow::Owned(mask_secret_lines(original)),
+        Cow::Owned(mask_secret_lines(content)),
+    )
 }
 
 pub fn print_diff(label: &str, original: &str, content: &str) {
