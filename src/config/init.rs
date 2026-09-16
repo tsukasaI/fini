@@ -67,6 +67,10 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 
 # Maximum line length (warn if exceeded). Comment out to disable.
 # max_line_length = 120
+
+# Maximum file size in bytes; larger files are skipped like binary files.
+# Default: 10485760 (10 MiB)
+# max_file_size = 10485760
 "#;
 
 /// Generate fini.toml in the specified directory (or current directory if None).

@@ -225,6 +225,17 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
         Err(e) => return FileOutcome::Error(e),
     };
 
+    // Skip oversized files before reading anything at all: normalization
+    // generates several full-length String/Vec<&str> copies of the content,
+    // and up to CHUNK_SIZE files process in parallel, so an unbounded
+    // multi-GB text file (a log dump, generated SQL, a fixture) can OOM-kill
+    // the process (issue #103).
+    if len > normalize_config.max_file_size {
+        return FileOutcome::Skipped {
+            reason: "too large (exceeds max-file-size)",
+        };
+    }
+
     // Classify from the first 8 KiB before reading the rest, so huge binaries
     // are never fully buffered just to be skipped (issue #39)
     let mut bytes = Vec::with_capacity(len.min(BINARY_CHECK_SIZE as u64) as usize);

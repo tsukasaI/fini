@@ -47,4 +47,8 @@ pub struct NormalizeSection {
 
     /// Maximum line length (None = disabled)
     pub max_line_length: Option<usize>,
+
+    /// Maximum file size in bytes; larger files are skipped like binary
+    /// files (default: 10 MiB, see DEFAULT_MAX_FILE_SIZE)
+    pub max_file_size: Option<u64>,
 }

@@ -29,6 +29,8 @@ pub struct CliNormalizeOptions {
     pub no_detect_secrets: Option<bool>,
     /// Maximum line length
     pub max_line_length: Option<usize>,
+    /// Maximum file size in bytes; larger files are skipped
+    pub max_file_size: Option<u64>,
 }
 
 /// Merge configurations from CLI, TOML, and defaults.
@@ -85,6 +87,10 @@ pub fn merge_normalize_config(
             .max_line_length
             .or_else(|| toml.and_then(|t| t.max_line_length))
             .or(defaults.max_line_length),
+        max_file_size: cli
+            .max_file_size
+            .or_else(|| toml.and_then(|t| t.max_file_size))
+            .unwrap_or(defaults.max_file_size),
     }
 }
 

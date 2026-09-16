@@ -32,7 +32,18 @@ pub struct NormalizeConfig {
     pub detect_secrets: bool,
     /// None = disabled
     pub max_line_length: Option<usize>,
+    /// Files larger than this are skipped (like binary files) rather than
+    /// fully buffered - a normalization pass generates several full-length
+    /// String/Vec<&str> copies of the content, and up to CHUNK_SIZE files
+    /// process in parallel, so an unbounded multi-GB text file (a log dump,
+    /// generated SQL, a fixture) can OOM-kill the process (issue #103).
+    pub max_file_size: u64,
 }
+
+/// Default `max_file_size`: generous for source/config files while still
+/// catching the multi-GB case issue #103 is about. Override via
+/// `--max-file-size` / `max_file_size` in fini.toml.
+pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 impl Default for NormalizeConfig {
     fn default() -> Self {
@@ -47,6 +58,7 @@ impl Default for NormalizeConfig {
             strict_debug: false,
             detect_secrets: true,
             max_line_length: None,
+            max_file_size: DEFAULT_MAX_FILE_SIZE,
         }
     }
 }

@@ -108,6 +108,11 @@ struct Cli {
     #[arg(long, value_name = "N")]
     max_line_length: Option<usize>,
 
+    /// Maximum file size in bytes; larger files are skipped like binary
+    /// files (default: 10 MiB)
+    #[arg(long, value_name = "BYTES")]
+    max_file_size: Option<u64>,
+
     /// Exclude files matching glob pattern (gitignore syntax, repeatable)
     #[arg(long, value_name = "PATTERN")]
     exclude: Vec<String>,
@@ -363,5 +368,6 @@ fn build_cli_options(cli: &Cli) -> CliNormalizeOptions {
         strict_debug: cli.strict_debug.then_some(true),
         no_detect_secrets: cli.no_detect_secrets.then_some(true),
         max_line_length: cli.max_line_length,
+        max_file_size: cli.max_file_size,
     }
 }
