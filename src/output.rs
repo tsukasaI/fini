@@ -128,6 +128,17 @@ pub fn print_check_result(
         if result.has_changes() {
             let (orig, new) = masked_pair(original, &result.content);
             print_diff(&safe_path_display(path), &orig, &new);
+        } else if !result.problems.is_empty() {
+            // No diff to show (detection-only problems change no content),
+            // but the problem list below still needs a filename to attach
+            // to - without this, multiple files' problems ran together with
+            // no way to tell which line belonged to which file (issue #104).
+            println!(
+                "{}Error:{} {}",
+                ctx.colors.error,
+                ctx.colors.reset(),
+                safe_path_display(path)
+            );
         }
     } else {
         println!(

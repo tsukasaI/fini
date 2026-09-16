@@ -2757,3 +2757,32 @@ fn test_issue_103_raised_limit_allows_processing() {
     assert!(output.status.success());
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
 }
+
+// issue #104: --check --diff on a detection-only file (no content change,
+// so no diff to show) must still print a filename header before the
+// problem list - otherwise, with multiple files, there's no way to tell
+// which line belongs to which file.
+#[test]
+fn test_issue_104() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.py"), "# TODO: x\n").unwrap();
+    fs::write(dir.path().join("b.py"), "password = \"hunter2hunter2\"\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--diff")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("a.py"),
+        "must name the file the TODO belongs to: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("b.py"),
+        "must name the file the secret belongs to: {stdout:?}"
+    );
+}
