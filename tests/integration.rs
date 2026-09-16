@@ -2516,10 +2516,9 @@ fn test_issue_98() {
         !stderr.contains("panicked"),
         "must not panic on a closed stdout pipe: {stderr:?}"
     );
-    const SIGPIPE: i32 = 13; // integration tests don't depend on libc
     assert_eq!(
         status.signal(),
-        Some(SIGPIPE),
+        Some(libc::SIGPIPE),
         "must be killed by SIGPIPE, not exit with a Rust panic's default code: {stderr:?}, status: {status:?}"
     );
 }

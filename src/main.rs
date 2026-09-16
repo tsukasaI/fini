@@ -19,8 +19,7 @@ use fini::{
 #[cfg(unix)]
 fn reset_sigpipe_to_default() {
     // SAFETY: signal() with SIG_DFL/SIG_IGN sets a disposition, not a
-    // handler pointer - no data races or invalid pointers are possible, and
-    // this runs single-threaded before any other code.
+    // handler pointer, so there's no memory-safety precondition to violate.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
