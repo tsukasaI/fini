@@ -2479,37 +2479,29 @@ fn test_issue_97() {
 }
 
 // issue #98: closing stdout early (e.g. `fini --quiet dir | head -1`) must
-// not panic. Rust's runtime ignores SIGPIPE by default, so a write to a
-// closed pipe used to surface as an io::Error that a println!/write!
-// .expect() turned into a panic (exit 101, not in the README's exit-code
-// table), after only partially processing fix mode's file list.
+// not panic. A pipe with no reader at all forces the very first write to
+// fail, so a single file is enough - no dependence on output size exceeding
+// the OS pipe buffer.
 #[cfg(unix)]
 #[test]
 fn test_issue_98() {
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
     use std::process::Stdio;
 
     let dir = TempDir::new().unwrap();
-    for i in 0..2000 {
-        fs::write(dir.path().join(format!("f{i}.txt")), "a   \n").unwrap();
-    }
+    fs::write(dir.path().join("f.txt"), "a   \n").unwrap();
+
+    let (read_end, write_end) = std::io::pipe().unwrap();
+    drop(read_end); // no reader: the first write gets EPIPE -> SIGPIPE
 
     let mut child = fini_cmd()
         .arg("--quiet")
         .arg(dir.path().to_str().unwrap())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(write_end))
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-
-    // Read only the first line, then drop our end of the pipe while fini
-    // likely still has most of the file list left to process/print.
-    {
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-    }
 
     let mut stderr = String::new();
     child
@@ -2524,9 +2516,10 @@ fn test_issue_98() {
         !stderr.contains("panicked"),
         "must not panic on a closed stdout pipe: {stderr:?}"
     );
-    assert_ne!(
-        status.code(),
-        Some(101),
-        "must not exit with a Rust panic's default code: {stderr:?}"
+    const SIGPIPE: i32 = 13; // integration tests don't depend on libc
+    assert_eq!(
+        status.signal(),
+        Some(SIGPIPE),
+        "must be killed by SIGPIPE, not exit with a Rust panic's default code: {stderr:?}, status: {status:?}"
     );
 }

@@ -241,6 +241,11 @@ Fix mode (without `--check`) exits 0 even when detection-only problems
 (TODOs, debug code, secrets) are reported — they are informational there.
 Use `fini --check` as the CI gate.
 
+On Unix, if fini's output pipe closes early (e.g. `fini --quiet dir | head`),
+the process is killed by SIGPIPE rather than exiting with a code of its own
+(the shell reports 141). In fix mode this stops processing at that point;
+files not yet reached are left unprocessed.
+
 ## Development
 
 ### Pre-commit Hooks

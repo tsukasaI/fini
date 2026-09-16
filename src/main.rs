@@ -11,17 +11,16 @@ use fini::{
     CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
-/// Rust's runtime sets SIGPIPE to SIG_IGN on startup so a write() to a
-/// closed pipe (e.g. `fini --quiet dir | head -1`) returns an `io::Error`
-/// instead of terminating the process - which then surfaced as an
-/// `.expect()` panic (exit 101, not in the README's exit-code table) on the
-/// very next `println!`/`write!` call, after only partially processing fix
-/// mode's file list. Restoring the default disposition makes fini die the
-/// same way any other Unix text-filter tool does when its output pipe
-/// closes early: killed by the signal, no panic message (issue #98).
-/// A no-op on non-Unix targets, where this signal doesn't exist.
+/// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
+/// disposition so a closed output pipe terminates the process (signal death,
+/// no panic) instead of surfacing as an `io::Error` on the next write
+/// (issue #98). Called before any other code runs, so no threads exist yet
+/// to race this call.
 #[cfg(unix)]
 fn reset_sigpipe_to_default() {
+    // SAFETY: signal() with SIG_DFL/SIG_IGN sets a disposition, not a
+    // handler pointer - no data races or invalid pointers are possible, and
+    // this runs single-threaded before any other code.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
