@@ -2208,4 +2208,8 @@ fn test_issue_93_stdin() {
         !stderr.contains("hunter2hunter2"),
         "the raw secret value must never reach --stdin --diff output either: {stderr:?}"
     );
+    assert!(
+        stderr.contains("[line masked: potential"),
+        "masking should still visibly run on stdin, not just suppress the diff: {stderr:?}"
+    );
 }

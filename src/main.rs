@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -159,11 +158,6 @@ fn main() -> ExitCode {
         toml_config.as_ref().and_then(|c| c.exclude.as_deref()),
     );
 
-    // Diff masking is a defense-in-depth output guarantee, not a detection
-    // feature: a repo-local fini.toml turning off *detection* (allowed, but
-    // never silent - see the warning above) must not also turn off masking
-    // a secret's raw value out of --diff output (issue #93).
-    let mask_secrets = true;
     let config = Config {
         check_only: cli.check,
         output_mode,
@@ -176,13 +170,7 @@ fn main() -> ExitCode {
     let verbose = cli.verbose && !cli.quiet;
     let show_progress = !cli.quiet && !cli.no_progress && std::io::stdout().is_terminal();
 
-    let ctx = OutputContext::new(
-        output_mode,
-        use_colors,
-        verbose,
-        show_progress,
-        mask_secrets,
-    );
+    let ctx = OutputContext::new(output_mode, use_colors, verbose, show_progress);
 
     match run(&cli.paths, &config, &ctx) {
         Ok(result) => {
@@ -246,9 +234,9 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
                     // enabled: masking is an output guarantee independent of
                     // the detection feature it happens to share patterns
                     // with (issue #93).
-                    let (orig, new): (Cow<str>, Cow<str>) = (
-                        Cow::Owned(mask_secret_lines(&input)),
-                        Cow::Owned(mask_secret_lines(&result.content)),
+                    let (orig, new) = (
+                        mask_secret_lines(&input),
+                        mask_secret_lines(&result.content),
                     );
                     // Skip the diff header when there's nothing to show a
                     // diff of - either no content change, or masking
