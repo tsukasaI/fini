@@ -2533,18 +2533,34 @@ fn test_issue_99() {
     let extension_ts =
         fs::read_to_string(manifest_dir.join("editors/vscode/src/extension.ts")).unwrap();
 
+    // Search per line (not the whole file) and skip the first match on a
+    // commented-out line, so a stale `// const NAME = [...]` left behind by
+    // a prior edit can't shadow the live declaration.
     let parse_version_const = |name: &str| -> (u32, u32, u32) {
-        let marker = format!("const {name}: [number, number, number] = [");
-        let start = extension_ts
-            .find(&marker)
-            .unwrap_or_else(|| panic!("{name} not found in extension.ts"))
-            + marker.len();
-        let rest = &extension_ts[start..];
-        let end = rest.find(']').expect("closing bracket");
-        let parts: Vec<u32> = rest[..end]
+        let prefix = format!("const {name}");
+        let line = extension_ts
+            .lines()
+            .find(|l| {
+                let trimmed = l.trim_start();
+                trimmed.starts_with(&prefix) && !trimmed.starts_with("//")
+            })
+            .unwrap_or_else(|| panic!("{name} not found in extension.ts"));
+        // Find the value array specifically, not the `[number, number,
+        // number]` type annotation that precedes it on the same line.
+        let assign = line.find('=').expect("assignment");
+        let start = assign + line[assign..].find('[').expect("opening bracket");
+        let end = line.rfind(']').expect("closing bracket");
+        let parts: Vec<u32> = line[start + 1..end]
             .split(',')
-            .map(|s| s.trim().parse().expect("numeric version component"))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().expect("numeric version component"))
             .collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "{name} must have exactly 3 components: {line:?}"
+        );
         (parts[0], parts[1], parts[2])
     };
 
@@ -2556,22 +2572,23 @@ fn test_issue_99() {
         "0.5.0 must fall inside the tested range [{min:?}, {max_exclusive:?})"
     );
 
-    let cargo_toml = fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
-    let version_line = cargo_toml
-        .lines()
-        .find(|l| l.trim_start().starts_with("version"))
-        .expect("Cargo.toml must have a version field");
-    let cli_version = version_line
-        .split('"')
-        .nth(1)
-        .expect("quoted version string");
-    let parts: Vec<u32> = cli_version.split('.').map(|s| s.parse().unwrap()).collect();
+    // Read the CLI's actual reported version, the same channel the
+    // extension itself checks (fini --version), rather than re-parsing
+    // Cargo.toml's [package] section by hand.
+    let output = fini_cmd().arg("--version").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = stdout
+        .trim()
+        .strip_prefix("fini ")
+        .expect("`fini --version` must start with 'fini '");
+    let parts: Vec<u32> = version.split('.').map(|s| s.parse().unwrap()).collect();
     let cli_version = (parts[0], parts[1], parts[2]);
 
     assert!(
         min <= cli_version && cli_version < max_exclusive,
         "the current CLI version {cli_version:?} must fall inside the extension's \
-         tested range [{min:?}, {max_exclusive:?}) - bump COMPATIBLE_CLI_MAX_EXCLUSIVE \
-         when releasing past it"
+         tested range [{min:?}, {max_exclusive:?}) - widen COMPATIBLE_CLI_MAX_EXCLUSIVE in \
+         editors/vscode/src/extension.ts AND ship a matching extension release \
+         (see release-playbook, VS Code row), or Marketplace users hit issue #99 again"
     );
 }
