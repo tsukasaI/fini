@@ -2522,3 +2522,56 @@ fn test_issue_98() {
         "must be killed by SIGPIPE, not exit with a Rust panic's default code: {stderr:?}, status: {status:?}"
     );
 }
+
+// issue #99: the VS Code extension's tested-CLI-version range must cover
+// both the specific version the issue reported as wrongly flagged (0.5.0)
+// and the CLI's own current version, so a routine release doesn't
+// immediately put the shipped extension outside its own declared range.
+#[test]
+fn test_issue_99() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let extension_ts =
+        fs::read_to_string(manifest_dir.join("editors/vscode/src/extension.ts")).unwrap();
+
+    let parse_version_const = |name: &str| -> (u32, u32, u32) {
+        let marker = format!("const {name}: [number, number, number] = [");
+        let start = extension_ts
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{name} not found in extension.ts"))
+            + marker.len();
+        let rest = &extension_ts[start..];
+        let end = rest.find(']').expect("closing bracket");
+        let parts: Vec<u32> = rest[..end]
+            .split(',')
+            .map(|s| s.trim().parse().expect("numeric version component"))
+            .collect();
+        (parts[0], parts[1], parts[2])
+    };
+
+    let min = parse_version_const("COMPATIBLE_CLI_MIN");
+    let max_exclusive = parse_version_const("COMPATIBLE_CLI_MAX_EXCLUSIVE");
+
+    assert!(
+        min <= (0, 5, 0) && (0, 5, 0) < max_exclusive,
+        "0.5.0 must fall inside the tested range [{min:?}, {max_exclusive:?})"
+    );
+
+    let cargo_toml = fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
+    let version_line = cargo_toml
+        .lines()
+        .find(|l| l.trim_start().starts_with("version"))
+        .expect("Cargo.toml must have a version field");
+    let cli_version = version_line
+        .split('"')
+        .nth(1)
+        .expect("quoted version string");
+    let parts: Vec<u32> = cli_version.split('.').map(|s| s.parse().unwrap()).collect();
+    let cli_version = (parts[0], parts[1], parts[2]);
+
+    assert!(
+        min <= cli_version && cli_version < max_exclusive,
+        "the current CLI version {cli_version:?} must fall inside the extension's \
+         tested range [{min:?}, {max_exclusive:?}) - bump COMPATIBLE_CLI_MAX_EXCLUSIVE \
+         when releasing past it"
+    );
+}
