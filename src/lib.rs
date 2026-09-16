@@ -158,7 +158,13 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
 
                     if config.check_only {
                         result.files_with_problems += 1;
-                        output::print_check_result(path, original, normalize_result, ctx);
+                        output::print_check_result(
+                            path,
+                            original,
+                            normalize_result,
+                            ctx,
+                            config.normalize.remove_zero_width,
+                        );
                     } else {
                         if normalize_result.has_changes() {
                             if config.should_write() {

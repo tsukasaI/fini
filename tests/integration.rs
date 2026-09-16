@@ -2136,6 +2136,134 @@ fn test_issue_92_exclude_matches_everything() {
     );
 }
 
+// issue #94: --check must not report "trailing whitespace" for a line whose
+// only trailing character is Unicode whitespace the fixer never removes
+// (remove_trailing_whitespace only trims ASCII space and tab).
+#[test]
+fn test_issue_94() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    // U+00A0 (NBSP) trailing the line - not ASCII space/tab. No EOF newline
+    // either, so the file has a *real* change (has_changes() true) and
+    // print_change_summary_to actually runs - a file with zero changes at
+    // all skips that function entirely, which would make this test pass
+    // regardless of how the trailing-whitespace check is written.
+    fs::write(&file, "hello\u{a0}").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("missing EOF newline"), "{stdout:?}");
+    assert!(
+        !stdout.contains("trailing whitespace"),
+        "must not claim trailing whitespace for a line fix mode won't change: {stdout:?}"
+    );
+
+    // Confirm the fixer really does leave the NBSP untouched (only adding
+    // the EOF newline), so the check above is verifying consistency and
+    // not just an absence of any report.
+    let fix_output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(fix_output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\u{a0}\n");
+}
+
+// issue #94 (follow-up): the reverse false-negative. A line ending in a
+// fullwidth space (U+3000) has no ASCII space/tab at the raw-line level,
+// but the fixer's earlier fullwidth-space-conversion step (issue #78's
+// pipeline, step 6) turns it into one before trailing-whitespace removal
+// runs (step 7) - so the fixer *does* trim it, and --check must say so.
+#[test]
+fn test_issue_94_fullwidth_space_trailing() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\u{3000}\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("trailing whitespace"),
+        "a trailing fullwidth space becomes trimmable ASCII whitespace \
+         once fullwidth-space conversion runs first, and must be reported: {stdout:?}"
+    );
+
+    let fix_output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(fix_output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
+}
+
+// issue #94 (follow-up): line_after_pre_trim_fixes must only strip
+// zero-width characters when that fix is actually enabled - a zero-width
+// space isn't ASCII whitespace, so with --keep-zero-width the fixer leaves
+// it (and the space before it) untouched, and --check must not claim
+// otherwise.
+#[test]
+fn test_issue_94_keep_zero_width() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    // No EOF newline, so the file has a real change regardless.
+    fs::write(&file, "hello \u{200b}").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--keep-zero-width")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("missing EOF newline"), "{stdout:?}");
+    assert!(
+        !stdout.contains("trailing whitespace"),
+        "with --keep-zero-width, the space before the ZWSP is not actually \
+         trailing (the ZWSP survives after it) and must not be reported: {stdout:?}"
+    );
+
+    let fix_output = fini_cmd()
+        .arg("--keep-zero-width")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(fix_output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello \u{200b}\n");
+}
+
+// Sibling of test_issue_94_keep_zero_width: the same input, without the
+// flag, must still be reported and trimmed - default (remove_zero_width =
+// true) behavior must not have regressed while fixing the flag-off case.
+#[test]
+fn test_issue_94_default_zero_width_removal_still_trims() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello \u{200b}").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("trailing whitespace"),
+        "without --keep-zero-width, the ZWSP is removed first, exposing the \
+         space as genuinely trailing: {stdout:?}"
+    );
+
+    let fix_output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(fix_output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
+}
+
 // issue #93: TOML `detect_secrets = false` disables *detection*, but must
 // not also disable masking a secret's raw value out of --diff output -
 // masking is an output guarantee, not part of the detection feature.

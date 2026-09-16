@@ -1,5 +1,8 @@
 use crate::colors::Colors;
-use crate::normalize::{mask_secret_lines, NormalizeConfig, NormalizeResult, Problem, ProblemKind};
+use crate::normalize::{
+    line_after_pre_trim_fixes, mask_secret_lines, NormalizeConfig, NormalizeResult, Problem,
+    ProblemKind,
+};
 use similar::{ChangeTag, TextDiff};
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -101,6 +104,7 @@ pub fn print_check_result(
     original: &str,
     result: &NormalizeResult,
     ctx: &OutputContext,
+    remove_zero_width: bool,
 ) {
     if ctx.mode == OutputMode::Quiet {
         println!("{}", safe_path_display(path));
@@ -130,8 +134,13 @@ pub fn print_check_result(
 
         if result.has_changes() {
             let stdout = io::stdout();
-            print_change_summary_to(&mut stdout.lock(), original, &result.content)
-                .expect("failed to write to stdout");
+            print_change_summary_to(
+                &mut stdout.lock(),
+                original,
+                &result.content,
+                remove_zero_width,
+            )
+            .expect("failed to write to stdout");
         }
     }
 
@@ -151,6 +160,7 @@ pub fn print_change_summary_to<W: Write>(
     w: &mut W,
     original: &str,
     result_content: &str,
+    remove_zero_width: bool,
 ) -> io::Result<()> {
     // A lone `\r` is itself a line ending that normalization collapses to
     // `\n` (see normalize::fix::normalize_line_endings), but str::lines()
@@ -184,7 +194,11 @@ pub fn print_change_summary_to<W: Write>(
     }
 
     for (i, orig_line) in original_lf.lines().enumerate() {
-        if orig_line.len() != orig_line.trim_end().len() {
+        // See line_after_pre_trim_fixes's doc for why the trim check runs
+        // against the pre-trim-fixed line rather than the raw one
+        // (issue #94).
+        let after_earlier_fixes = line_after_pre_trim_fixes(orig_line, remove_zero_width);
+        if after_earlier_fixes.len() != after_earlier_fixes.trim_end_matches([' ', '\t']).len() {
             writeln!(w, "  - trailing whitespace at line {}", i + 1)?;
         }
     }

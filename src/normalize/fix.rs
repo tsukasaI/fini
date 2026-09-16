@@ -44,6 +44,31 @@ pub(super) fn remove_trailing_whitespace(content: &str) -> String {
         .join("\n")
 }
 
+/// Reproduces the fixer transforms that run *before* trailing-whitespace
+/// removal in the pipeline (zero-width-character removal, fullwidth-space
+/// conversion) on a single line, so a caller deciding "would trailing-
+/// whitespace removal change this line" sees what the fixer sees rather
+/// than the raw line (issue #94). `remove_zero_width` must match the
+/// config's own setting - zero-width removal is optional (`--keep-zero-width`
+/// / `remove_zero_width = false`), unlike fullwidth-space conversion, which
+/// always runs.
+///
+/// Steps that can drop a line entirely (code-fence removal, leading/
+/// consecutive-blank-line limits) are deliberately not reproduced here: this
+/// only answers "is this line's own trailing whitespace trimmable", not
+/// "does this line survive at all". A leading BOM is a line *prefix* and
+/// never affects a trailing-whitespace check, so it needs no special case.
+pub(crate) fn line_after_pre_trim_fixes(line: &str, remove_zero_width: bool) -> String {
+    let without_zero_width: String = if remove_zero_width {
+        line.chars()
+            .filter(|c| !ZERO_WIDTH_CHARS.contains(c))
+            .collect()
+    } else {
+        line.to_string()
+    };
+    without_zero_width.replace(FULLWIDTH_SPACE, " ")
+}
+
 pub(super) fn normalize_eof_newline(content: &str) -> String {
     if content.is_empty() {
         return String::new();

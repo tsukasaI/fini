@@ -253,7 +253,12 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
                     // print_change_summary_to doesn't cover.
                     let _ = writeln!(stderr, "Error: stdin");
                     if result.has_changes() {
-                        let _ = print_change_summary_to(&mut stderr, &input, &result.content);
+                        let _ = print_change_summary_to(
+                            &mut stderr,
+                            &input,
+                            &result.content,
+                            normalize.remove_zero_width,
+                        );
                     }
                 }
                 let _ = print_problems_to(&mut stderr, &result.problems);
