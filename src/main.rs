@@ -11,6 +11,23 @@ use fini::{
     CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
+/// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
+/// disposition so a closed output pipe terminates the process (signal death,
+/// no panic) instead of surfacing as an `io::Error` on the next write
+/// (issue #98). Called before any other code runs, so no threads exist yet
+/// to race this call.
+#[cfg(unix)]
+fn reset_sigpipe_to_default() {
+    // SAFETY: signal() with SIG_DFL/SIG_IGN sets a disposition, not a
+    // handler pointer, so there's no memory-safety precondition to violate.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe_to_default() {}
+
 #[derive(Parser)]
 #[command(name = "fini")]
 #[command(version, about = "A lightweight file normalization CLI tool")]
@@ -105,6 +122,8 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    reset_sigpipe_to_default();
+
     let cli = Cli::parse();
 
     if cli.init {

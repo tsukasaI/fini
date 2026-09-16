@@ -2477,3 +2477,48 @@ fn test_issue_97() {
         "the `latest` version lookup must authenticate its GitHub API call"
     );
 }
+
+// issue #98: closing stdout early (e.g. `fini --quiet dir | head -1`) must
+// not panic. A pipe with no reader at all forces the very first write to
+// fail, so a single file is enough - no dependence on output size exceeding
+// the OS pipe buffer.
+#[cfg(unix)]
+#[test]
+fn test_issue_98() {
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("f.txt"), "a   \n").unwrap();
+
+    let (read_end, write_end) = std::io::pipe().unwrap();
+    drop(read_end); // no reader: the first write gets EPIPE -> SIGPIPE
+
+    let mut child = fini_cmd()
+        .arg("--quiet")
+        .arg(dir.path().to_str().unwrap())
+        .stdout(Stdio::from(write_end))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+
+    assert!(
+        !stderr.contains("panicked"),
+        "must not panic on a closed stdout pipe: {stderr:?}"
+    );
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGPIPE),
+        "must be killed by SIGPIPE, not exit with a Rust panic's default code: {stderr:?}, status: {status:?}"
+    );
+}

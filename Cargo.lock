@@ -213,6 +213,7 @@ dependencies = [
  "clap",
  "ignore",
  "indicatif",
+ "libc",
  "rayon",
  "regex",
  "serde",
