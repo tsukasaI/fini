@@ -80,7 +80,10 @@ pub fn walk_paths(
 
         let mut patterns: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
         if include_hidden {
-            patterns.push(".git/");
+            // No trailing slash: a worktree or submodule checkout has
+            // ".git" as a *file* (containing "gitdir: ..."), not a
+            // directory, and a directory-only pattern wouldn't match it.
+            patterns.push(".git");
         }
 
         let overrides_built = if patterns.is_empty() {
@@ -123,11 +126,11 @@ pub fn walk_paths(
         // unconditionally, so such a file (and any secret in it) was
         // silently skipped. Re-add tracked files under this path that the
         // walk excluded *only because of .gitignore*. This replicates the
-        // primary walk's other filtering (hidden files, --exclude/config
-        // overrides, never following a symlink) as closely as a second,
-        // non-walking pass reasonably can; known carve-out: a `.ignore` file
-        // (as opposed to `.gitignore`) is not consulted here, so a tracked
-        // file it excludes is still rescued.
+        // primary walk's other filtering (hidden files unless --hidden,
+        // --exclude/config overrides, never following a symlink) as closely
+        // as a second, non-walking pass reasonably can; known carve-out: a
+        // `.ignore` file (as opposed to `.gitignore`) is not consulted here,
+        // so a tracked file it excludes is still rescued.
         let root = Path::new(path);
         if root.is_dir() {
             for rel in git_tracked_files_relative(root) {
@@ -142,11 +145,16 @@ pub fn walk_paths(
                     continue;
                 }
 
-                // Mirrors builder.hidden(true): skip any path with a
-                // dotfile/dotdir component.
-                if rel
-                    .components()
-                    .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+                // Mirrors builder.hidden(!include_hidden): skip any path
+                // with a dotfile/dotdir component, unless --hidden opted
+                // into scanning those too (issue #101) - a tracked-and-
+                // gitignored secret under a dotfile/dotdir (.env,
+                // .github/workflows/*.yml) is exactly the #101 scenario
+                // this rescue must not silently exempt.
+                if !include_hidden
+                    && rel
+                        .components()
+                        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
                 {
                     continue;
                 }
@@ -439,6 +447,60 @@ mod tests {
         assert!(
             !files.iter().any(|f| f.to_string_lossy().contains(".git")),
             "{files:?}"
+        );
+    }
+
+    #[test]
+    fn test_issue_101_gitignore_rescue_reaches_hidden_files_with_hidden() {
+        // The issue #85 tracked-but-gitignored rescue must not silently
+        // exempt dotfiles/dotdirs from --hidden: a secret committed under
+        // .env or .github/workflows/*.yml, then added to .gitignore, is
+        // exactly the #101 scenario this rescue must not fall through on.
+        // Uses an obscure filename (not .env) - a real .git directory makes
+        // git_global(true) consult the machine's actual global gitignore,
+        // which commonly lists .env.
+        let dir = TempDir::new().unwrap();
+        assert!(Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+
+        let tracked = dir.path().join(".fini_test_hidden_tracked");
+        fs::write(&tracked, "SECRET=hunter2\n").unwrap();
+        assert!(Command::new("git")
+            .args(["-C"])
+            .arg(dir.path())
+            .args(["add", "-f", ".fini_test_hidden_tracked"])
+            .status()
+            .unwrap()
+            .success());
+        fs::write(dir.path().join(".gitignore"), ".fini_test_hidden_tracked\n").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+
+        let without_hidden: Vec<_> = walk_paths(&paths, &[], false)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            !without_hidden
+                .iter()
+                .any(|f| f.to_string_lossy().contains(".fini_test_hidden_tracked")),
+            "without --hidden, a hidden tracked file stays hidden: {without_hidden:?}"
+        );
+
+        let with_hidden: Vec<_> = walk_paths(&paths, &[], true)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            with_hidden
+                .iter()
+                .any(|f| f.to_string_lossy().contains(".fini_test_hidden_tracked")),
+            "--hidden must let the gitignore rescue reach a tracked hidden file too: {with_hidden:?}"
         );
     }
 

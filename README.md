@@ -81,6 +81,8 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --no-detect-secrets     Skip secret pattern detection
 --max-line-length <N>   Maximum line length (warn if exceeded)
 --exclude <PATTERN>     Exclude files matching glob pattern (repeatable)
+--hidden                Include hidden files (dotfiles) in directory scans;
+                        .git/ is still excluded either way
 --init                  Generate fini.toml configuration template
 --config <PATH>         Use specific config file
 ```
@@ -175,7 +177,9 @@ Directory scans skip hidden files by default (see Skipped below), including
 `.env` and `.github/workflows/*.yml`, two of the most common places a secret
 ends up. `fini --check .` as a CI secret-detection gate therefore does not
 cover them unless you also pass `--hidden`, or check those paths directly
-(`fini --check .env`).
+(`fini --check .env`). The GitHub Action below doesn't expose `--hidden` as
+an input yet; pass hidden paths explicitly via `files` instead
+(`files: '. .env .github'`).
 
 ## Skipped
 
