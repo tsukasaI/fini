@@ -3,8 +3,16 @@ use std::collections::{HashMap, HashSet};
 
 use super::ProblemKind;
 
-pub(super) const DIRECTIVE: &str = "fini:ignore";
+const DIRECTIVE: &str = "fini:ignore";
 const NEXT_LINE_DIRECTIVE: &str = "fini:ignore-next-line";
+
+/// Byte offset of a fini:ignore(-next-line) directive marker in `line`, if
+/// any - the one place that knows what counts as "directive text" on a
+/// line, shared by directive parsing and by detectors that must not scan
+/// past it (issue #95).
+pub(super) fn directive_start(line: &str) -> Option<usize> {
+    line.find(DIRECTIVE)
+}
 
 /// Tracks which lines have ignore directives and what kinds they suppress.
 /// `None` = ignore all kinds, `Some(set)` = ignore only listed kinds.
@@ -60,11 +68,8 @@ pub(super) fn parse_ignore_directives(content: &str, line_map: &[usize]) -> Igno
         let next_line_num = line_num + 1;
 
         if let Some(pos) = line.find(NEXT_LINE_DIRECTIVE) {
-            // The directive's own line gets the same kind restriction as
-            // the next line it targets, not an unconditional ignore-all:
-            // `fini:ignore-next-line todo` naming only "todo" must not also
-            // suppress an unrelated secret that happens to share the line
-            // with the directive itself (issue #95).
+            // Same kind restriction on the directive's own line as on the
+            // next line — not ignore-all (issue #95).
             let kinds = parse_kind_list(line, pos + NEXT_LINE_DIRECTIVE.len());
             map.insert(line_num, kinds.clone());
             map.insert(next_line_num, kinds);
@@ -205,6 +210,9 @@ mod tests {
         let content = "// fini:ignore-next-line todo\nsome code\n";
         let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
+        // issue #95: the directive's own line must only suppress the kinds
+        // it actually names, not every kind.
+        assert!(!map.is_ignored(1, &ProblemKind::SecretPattern { hint: "key" }));
     }
 
     #[test]
