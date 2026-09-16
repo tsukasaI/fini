@@ -225,6 +225,14 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
         Err(e) => return FileOutcome::Error(e),
     };
 
+    // Size gate before any read - see NormalizeConfig::max_file_size for why
+    // (issue #103).
+    if len > normalize_config.max_file_size {
+        return FileOutcome::Skipped {
+            reason: "too large (exceeds max-file-size)",
+        };
+    }
+
     // Classify from the first 8 KiB before reading the rest, so huge binaries
     // are never fully buffered just to be skipped (issue #39)
     let mut bytes = Vec::with_capacity(len.min(BINARY_CHECK_SIZE as u64) as usize);
@@ -251,8 +259,25 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
         return FileOutcome::Skipped { reason: "binary" };
     }
 
-    if let Err(e) = file.read_to_end(&mut bytes) {
+    // Bound this read too: the size gate above only checked the length at
+    // stat time, and a file can grow between that stat and this read (an
+    // actively appended log, or a hostile repo) - a security control must
+    // hold on every path, not just the common one. +1 so a file that grew
+    // to exactly the limit still isn't flagged, but anything beyond it is.
+    let remaining_allowed = normalize_config
+        .max_file_size
+        .saturating_add(1)
+        .saturating_sub(bytes.len() as u64);
+    if let Err(e) = Read::by_ref(&mut file)
+        .take(remaining_allowed)
+        .read_to_end(&mut bytes)
+    {
         return FileOutcome::Error(e);
+    }
+    if bytes.len() as u64 > normalize_config.max_file_size {
+        return FileOutcome::Skipped {
+            reason: "too large (exceeds max-file-size)",
+        };
     }
 
     let content = match String::from_utf8(bytes) {

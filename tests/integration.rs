@@ -2692,3 +2692,68 @@ fn test_issue_101() {
         "--hidden must scan .env: {stdout:?}"
     );
 }
+
+// issue #103: a file exceeding --max-file-size must be skipped like a
+// binary file (counted, not fully buffered), instead of unconditionally
+// reading and normalizing arbitrarily large files.
+#[test]
+fn test_issue_103() {
+    let dir = TempDir::new().unwrap();
+    let big = dir.path().join("big.txt");
+    let small = dir.path().join("small.txt");
+    fs::write(&big, "x".repeat(2000)).unwrap();
+    fs::write(&small, "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--max-file-size")
+        .arg("1000")
+        .arg("-v")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the oversized file must be skipped, not reported as a --check problem: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("too large"),
+        "the oversized file must be reported as skipped: {stdout:?}"
+    );
+    assert_eq!(fs::read_to_string(&big).unwrap(), "x".repeat(2000));
+
+    // The small file, under the limit, is still checked normally.
+    assert!(fs::read_to_string(&small).unwrap() == "hello\n");
+}
+
+// issue #103: raising --max-file-size lets a file that would otherwise be
+// skipped get processed normally.
+#[test]
+fn test_issue_103_raised_limit_allows_processing() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("medium.txt");
+    fs::write(&file, "hello   \n").unwrap(); // trailing whitespace triggers a fix
+
+    fini_cmd()
+        .arg("--max-file-size")
+        .arg("1")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "hello   \n",
+        "a file over a tiny --max-file-size must be left untouched"
+    );
+
+    let output = fini_cmd()
+        .arg("--max-file-size")
+        .arg("1000")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
+}

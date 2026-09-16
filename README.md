@@ -80,6 +80,10 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --strict-debug          Include console.error/eprintln in debug code detection
 --no-detect-secrets     Skip secret pattern detection
 --max-line-length <N>   Maximum line length (warn if exceeded)
+--max-file-size <BYTES> Maximum file size in bytes; larger files are skipped
+                        like binary files (default: 10 MiB). Set a very
+                        large value (e.g. the u64 max) to effectively
+                        disable this gate
 --exclude <PATTERN>     Exclude files matching glob pattern (repeatable)
 --hidden                Include hidden files (dotfiles) in directory scans;
                         .git/ is still excluded either way
@@ -186,6 +190,7 @@ your repo).
 ## Skipped
 
 - Binary files (null bytes in first 8KB)
+- Files larger than `--max-file-size` (default: 10 MiB)
 - UTF-16 and other non-UTF-8 text files (unsupported encodings)
 - Symlinks (never followed or rewritten)
 - Empty files
