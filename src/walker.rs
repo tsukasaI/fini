@@ -74,6 +74,13 @@ pub fn walk_paths(
             // include - --hidden widens fini's own default, not the user's
             // explicit ignore rules.
             .hidden(!include_hidden)
+            // These three only take effect inside a git repository:
+            // WalkBuilder's `require_git` defaults to true, so a directory
+            // with no `.git` ancestor (a `git archive` export, an extracted
+            // tarball) has its .gitignore files ignored entirely - deliberate
+            // (matches issue #86's scoping of config discovery to the same
+            // boundary), but the README used to describe this as
+            // unconditional (issue #105).
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true);
@@ -567,6 +574,37 @@ mod tests {
         assert!(files
             .iter()
             .all(|f| !f.to_string_lossy().contains("ignored.txt")));
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains("kept.txt")));
+    }
+
+    #[test]
+    fn test_issue_105() {
+        // .gitignore is only honoured inside a git repository - WalkBuilder's
+        // require_git defaults to true. Outside one (no .git ancestor: a
+        // `git archive` export, an extracted tarball, a plain directory),
+        // .gitignore files are not consulted at all, and everything they'd
+        // otherwise exclude is scanned. This pins that behavior, which the
+        // README previously described as unconditional.
+        let dir = TempDir::new().unwrap();
+        // Deliberately no .git directory here.
+        fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::write(dir.path().join("kept.txt"), "kept").unwrap();
+        fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[], false)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(
+            files
+                .iter()
+                .any(|f| f.to_string_lossy().contains("ignored.txt")),
+            "outside a git repo, .gitignore must not be consulted: {files:?}"
+        );
         assert!(files
             .iter()
             .any(|f| f.to_string_lossy().contains("kept.txt")));

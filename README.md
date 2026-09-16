@@ -199,7 +199,11 @@ your repo).
   `.gitignore`/global excludes: a file your own ignore rules already hide
   (many developers' global gitignore lists `.env`) stays hidden regardless
 - `.git/` directory
-- `.gitignore` patterns
+- `.gitignore` patterns - only within a git repository (a `.git` directory
+  somewhere above the scanned path). Outside one (a `git archive` export, a
+  tarball extraction, a directory that was never `git init`'d), `.gitignore`
+  files are not consulted at all, and everything they'd otherwise exclude is
+  scanned
 
 Skipped binary / non-UTF-8 / symlink files are counted in the run summary;
 use `--verbose` to list them individually with the skip reason.
