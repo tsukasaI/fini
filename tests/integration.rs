@@ -2403,3 +2403,27 @@ fn test_issue_95_no_phantom_suppression_on_clean_file() {
         "a clean file must report zero suppressed problems: {stdout:?}"
     );
 }
+
+// issue #96: the GitHub Action must extract the fini binary into a
+// dedicated temp directory (outside the consumer's checkout, which is the
+// composite action's default working directory), and add only that
+// directory to PATH - not the checkout root.
+#[test]
+fn test_issue_96() {
+    let action_yaml =
+        fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("action.yaml"))
+            .unwrap();
+
+    assert!(
+        action_yaml.contains("INSTALL_DIR=\"$(mktemp -d"),
+        "must extract into a dedicated temp directory, not the checkout root"
+    );
+    assert!(
+        !action_yaml.contains("echo \"$PWD\" >> \"$GITHUB_PATH\""),
+        "must not add the working directory (the consumer's checkout) to PATH"
+    );
+    assert!(
+        action_yaml.contains("echo \"$INSTALL_DIR\" >> \"$GITHUB_PATH\""),
+        "PATH must point at the dedicated install directory"
+    );
+}
