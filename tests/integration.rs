@@ -864,7 +864,10 @@ fn test_exit_code_2_on_write_permission_error() {
     assert_eq!(output.status.code(), Some(2));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Error writing"), "stderr: {stderr}");
+    // Specifically the mode-bit guard's own message, so removing that guard
+    // (issue #100 kept it alongside the newer write-probe check, for root)
+    // would be caught here, not just a generic "some write error" match.
+    assert!(stderr.contains("read-only file"), "stderr: {stderr}");
 }
 
 // issue #100: write_atomic's read-only guard must check actual writability
