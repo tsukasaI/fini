@@ -2415,8 +2415,8 @@ fn test_issue_96() {
             .unwrap();
 
     assert!(
-        action_yaml.contains("mktemp -d"),
-        "must extract into a dedicated temp directory, not the checkout root: {action_yaml}"
+        action_yaml.contains("INSTALL_DIR=\"$(mktemp -d"),
+        "must extract into a dedicated temp directory, not the checkout root"
     );
     assert!(
         !action_yaml.contains("echo \"$PWD\" >> \"$GITHUB_PATH\""),
@@ -2424,6 +2424,6 @@ fn test_issue_96() {
     );
     assert!(
         action_yaml.contains("echo \"$INSTALL_DIR\" >> \"$GITHUB_PATH\""),
-        "PATH must point at the dedicated install directory: {action_yaml}"
+        "PATH must point at the dedicated install directory"
     );
 }

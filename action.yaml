@@ -64,16 +64,6 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        # Install outside the consumer's checkout: extracting into the
-        # default working directory ($GITHUB_WORKSPACE, the caller's repo)
-        # would leave the fini binary sitting in their tree (visible to
-        # git status, other steps, and fini's own future scans of that
-        # repo), and adding that whole directory to PATH would let any
-        # same-named file already in the repo root shadow a real command
-        # for the rest of the job (issue #96).
-        INSTALL_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/fini-install.XXXXXX")"
-        cd "$INSTALL_DIR"
-
         ARCH=$(uname -m)
         OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
@@ -89,6 +79,16 @@ runs:
 
         TARBALL="fini-${TARGET}.tar.gz"
         BASE="https://github.com/tsukasaI/fini/releases/download/${VERSION}"
+
+        # Install outside the consumer's checkout: extracting into the
+        # default working directory ($GITHUB_WORKSPACE, the caller's repo)
+        # would leave the fini binary sitting in their tree (visible to
+        # git status, other steps, and fini's own future scans of that
+        # repo), and adding that whole directory to PATH would let any
+        # same-named file already in the repo root shadow a real command
+        # for the rest of the job (issue #96).
+        INSTALL_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/fini-install.XXXXXX")"
+        cd "$INSTALL_DIR"
 
         # Download tarball and checksums (separate steps so we can verify before extracting).
         curl -fsSL --retry 3 -o "$TARBALL"     "${BASE}/${TARBALL}"
