@@ -2655,3 +2655,40 @@ fn test_issue_99() {
          (see release-playbook, VS Code row), or Marketplace users hit issue #99 again"
     );
 }
+
+// issue #101: hidden files (.env, .github/workflows/*.yml) are silently
+// excluded from a `fini --check .` secret-detection CI gate by default -
+// --hidden opts a directory scan into covering them too.
+#[test]
+fn test_issue_101() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".env"),
+        "AWS_SECRET_ACCESS_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "hidden files are excluded by default"
+    );
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--hidden")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("potential secret"),
+        "--hidden must scan .env: {stdout:?}"
+    );
+}

@@ -45,6 +45,11 @@ pub struct Config {
     pub diff: bool,
     pub normalize: NormalizeConfig,
     pub exclude_patterns: Vec<String>,
+    /// Whether `--hidden` was passed: include dotfiles (.env,
+    /// .github/workflows/*.yml) in directory scans instead of always
+    /// skipping them, since that's where secrets land most often
+    /// (issue #101). `.git/` is still excluded either way.
+    pub include_hidden: bool,
 }
 
 impl Config {

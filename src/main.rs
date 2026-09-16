@@ -112,6 +112,11 @@ struct Cli {
     #[arg(long, value_name = "PATTERN")]
     exclude: Vec<String>,
 
+    /// Include hidden files (.env, .github/workflows/*.yml, etc.) in
+    /// directory scans; .git/ is still excluded
+    #[arg(long)]
+    hidden: bool,
+
     /// Generate a template fini.toml configuration file
     #[arg(long)]
     init: bool,
@@ -183,6 +188,7 @@ fn main() -> ExitCode {
         diff: cli.diff,
         normalize,
         exclude_patterns,
+        include_hidden: cli.hidden,
     };
 
     let use_colors = should_use_colors(cli.color, cli.no_color);

@@ -81,6 +81,8 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --no-detect-secrets     Skip secret pattern detection
 --max-line-length <N>   Maximum line length (warn if exceeded)
 --exclude <PATTERN>     Exclude files matching glob pattern (repeatable)
+--hidden                Include hidden files (dotfiles) in directory scans;
+                        .git/ is still excluded either way
 --init                  Generate fini.toml configuration template
 --config <PATH>         Use specific config file
 ```
@@ -171,13 +173,26 @@ verbatim in a diff: be careful publishing CI logs that include `--diff` output.
 Disabling secret detection via `fini.toml` (`detect_secrets = false`) prints a
 warning to stderr that `--quiet` does not suppress.
 
+Directory scans skip hidden files by default (see Skipped below), including
+`.env` and `.github/workflows/*.yml`, two of the most common places a secret
+ends up. `fini --check .` as a CI secret-detection gate therefore does not
+cover them unless you also pass `--hidden`, or check those paths directly
+(`fini --check .env`). The GitHub Action below doesn't expose `--hidden` as
+an input yet; pass hidden paths explicitly via `files` instead
+(`files: '. .github'` - fini exits 2 on a path that doesn't exist, so only
+list paths you know are present, e.g. add `.env` only if it's tracked in
+your repo).
+
 ## Skipped
 
 - Binary files (null bytes in first 8KB)
 - UTF-16 and other non-UTF-8 text files (unsupported encodings)
 - Symlinks (never followed or rewritten)
 - Empty files
-- Hidden files (`.foo`)
+- Hidden files (`.foo`); pass `--hidden` to include them (`.git/` is still
+  excluded either way). `--hidden` widens fini's own default, not your
+  `.gitignore`/global excludes: a file your own ignore rules already hide
+  (many developers' global gitignore lists `.env`) stays hidden regardless
 - `.git/` directory
 - `.gitignore` patterns
 
