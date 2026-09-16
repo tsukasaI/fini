@@ -37,7 +37,11 @@ Architecture reference: `CLAUDE.md` in repo root. Don't duplicate it here.
    `cargo update -p fini` equivalent) so `Cargo.lock` picks up the new
    version — `publish-crate`
    runs `cargo publish --locked --dry-run`, and `--locked` fails if the lock
-   file is stale.
+   file is stale. Re-run `cargo test` after the bump, not just before it in
+   step 1: `test_issue_99` reads the bumped `Cargo.toml` version and fails
+   if it has reached the VS Code extension's `COMPATIBLE_CLI_MAX_EXCLUSIVE`
+   (`release.yaml`'s tag-push trigger never runs the test suite, so this is
+   the only gate that catches it before users do).
 3. Commit the bump (`chore: bump vX.Y.Z`, matches history, e.g. `57c3c93`).
 4. Tag `vX.Y.Z` matching `Cargo.toml` exactly and push the tag — this is
    the release trigger (`on.push.tags: v*` in `release.yaml`). The
@@ -97,7 +101,7 @@ stale pins), use the global `actions-pin-audit` skill
 | Nix flake | `flake.nix` | bump `version = "X.Y.Z"` string only — `cargoLock.lockFile` points at `Cargo.lock`, no hash to update | no — manual, single-line edit |
 | pre-commit hook | `.pre-commit-hooks.yaml` | none — `entry: fini` is unpinned, always resolves to whatever `fini` is on `PATH` | n/a, no version reference |
 | GitHub Action | `action.yaml` | no version bump needed (resolves `latest` release or caller-pinned version at runtime); `verify-attestation` defaults to `true` (attestations exist for every release from v0.4.0 onward) - callers pinning a release before v0.4.0 must set it to `false` | manual awareness, not a file edit |
-| VS Code extension | `editors/vscode/package.json`, tag `vscode-v*` | **decoupled from the CLI**, with its own version number and own tag prefix/workflow (`release-vscode.yaml`). Do NOT bump per CLI release — only bump+tag when the extension itself changed. **Exception:** a release that changes the `--stdin` contract (or `--version` output shape) must ship a matching extension release that updates `COMPATIBLE_CLI_MIN`/`COMPATIBLE_CLI_MAX_EXCLUSIVE` in `editors/vscode/src/extension.ts` (tsukasaI/fini#43) | separate manual release, not part of this checklist unless the extension changed |
+| VS Code extension | `editors/vscode/package.json`, tag `vscode-v*` | **decoupled from the CLI**, with its own version number and own tag prefix/workflow (`release-vscode.yaml`). Do NOT bump per CLI release — only bump+tag when the extension itself changed. **Exception:** a release that changes the `--stdin` contract (or `--version` output shape) must ship a matching extension release that updates `COMPATIBLE_CLI_MIN`/`COMPATIBLE_CLI_MAX_EXCLUSIVE` in `editors/vscode/src/extension.ts` (tsukasaI/fini#43). **Also:** `cargo test`'s `test_issue_99` fails once the new CLI version reaches `COMPATIBLE_CLI_MAX_EXCLUSIVE` - widen that range in `extension.ts` *and* ship a matching `vscode-v*` release when it does, or Marketplace users see the #99 "out of tested range" warning again even though the repo's own test passes | separate manual release, not part of this checklist unless the extension changed |
 
 ## Re-verify before relying on this file
 
