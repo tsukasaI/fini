@@ -148,6 +148,10 @@ API_KEY = "sk_test_example"
 
 Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `fullwidth`, `zero-width`, `leading-blanks`, `blank-lines`, `code-block`
 
+Everything on a line from `fini:ignore`/`fini:ignore-next-line` onward is
+directive syntax, not code, so it's never scanned for TODO/FIXME markers or
+counted as a detection.
+
 Suppressions are counted in the run summary. Suppressed `secret` detections are
 always reported on stderr with `file:line` (even with `--quiet`) so they remain
 auditable.

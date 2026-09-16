@@ -113,6 +113,9 @@ pub(super) fn detect_todo_and_fixme_comments(
     let mut fixmes = Vec::new();
 
     for (line_idx, line) in content.lines().enumerate() {
+        // Text after a fini:ignore directive is kind-list syntax, not code;
+        // never scan it for markers (issue #95).
+        let line = super::ignore::directive_start(line).map_or(line, |pos| &line[..pos]);
         if is_valid_marker(line, "TODO") {
             todos.push(Problem {
                 line: line_map[line_idx],
@@ -330,6 +333,21 @@ mod tests {
         let (todos, fixmes) = detect_todo_and_fixme_comments(content, &identity_map(content));
         assert_eq!(todos.iter().map(|p| p.line).collect::<Vec<_>>(), [1, 3]);
         assert_eq!(fixmes.iter().map(|p| p.line).collect::<Vec<_>>(), [2]);
+    }
+
+    // issue #95: a kind name in a fini:ignore(-next-line) directive's own
+    // kind-list text must never be mistaken for a real TODO/FIXME marker,
+    // but a real marker before the directive on the same line must still
+    // be detected.
+    #[test]
+    fn test_issue_95_directive_kind_list_not_detected_as_marker() {
+        let content = "// fini:ignore-next-line todo\n";
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        assert!(todos.is_empty());
+
+        let content = "// TODO: x fini:ignore todo\n";
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        assert_eq!(todos.len(), 1);
     }
 
     #[test]
