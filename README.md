@@ -196,10 +196,17 @@ your repo).
 - Empty files
 - Hidden files (`.foo`); pass `--hidden` to include them (`.git/` is still
   excluded either way). `--hidden` widens fini's own default, not your
-  `.gitignore`/global excludes: a file your own ignore rules already hide
+  `.gitignore`/global excludes (inside a git repository - see the
+  `.gitignore` entry below): a file your own ignore rules already hide
   (many developers' global gitignore lists `.env`) stays hidden regardless
 - `.git/` directory
-- `.gitignore` patterns
+- `.gitignore` patterns - only within a git repository (a `.git` directory
+  or file in, or anywhere above, the scanned path). Outside one (a
+  `git archive` export, a tarball extraction, a directory that was never
+  `git init`'d), `.gitignore` files are not consulted at all, and everything
+  they'd otherwise exclude is scanned
+- `.ignore` files (ripgrep-style) - honored everywhere, including outside a
+  git repository
 
 Skipped binary / non-UTF-8 / symlink files are counted in the run summary;
 use `--verbose` to list them individually with the skip reason.

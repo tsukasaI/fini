@@ -74,6 +74,11 @@ pub fn walk_paths(
             // include - --hidden widens fini's own default, not the user's
             // explicit ignore rules.
             .hidden(!include_hidden)
+            // These three only take effect inside a git repository:
+            // WalkBuilder's `require_git` defaults to true, so a directory
+            // with no `.git` ancestor (a `git archive` export, an extracted
+            // tarball) has its .gitignore files ignored entirely - deliberate
+            // (issue #86, issue #105).
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true);
@@ -123,9 +128,9 @@ pub fn walk_paths(
         // issue #85: a file already tracked by git stays tracked even after
         // it's added to .gitignore (git itself ignores .gitignore for paths
         // it already tracks) — but the walk above honors .gitignore
-        // unconditionally, so such a file (and any secret in it) was
-        // silently skipped. Re-add tracked files under this path that the
-        // walk excluded *only because of .gitignore*. This replicates the
+        // regardless of tracked status, so such a file (and any secret in
+        // it) was silently skipped. Re-add tracked files under this path
+        // that the walk excluded *only because of .gitignore*. This replicates the
         // primary walk's other filtering (hidden files unless --hidden,
         // --exclude/config overrides, never following a symlink) as closely
         // as a second, non-walking pass reasonably can; known carve-out: a
@@ -567,6 +572,43 @@ mod tests {
         assert!(files
             .iter()
             .all(|f| !f.to_string_lossy().contains("ignored.txt")));
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains("kept.txt")));
+    }
+
+    #[test]
+    fn test_issue_105() {
+        // .gitignore is only honoured inside a git repository - WalkBuilder's
+        // require_git defaults to true. Outside one (no .git ancestor: a
+        // `git archive` export, an extracted tarball, a plain directory),
+        // .gitignore files are not consulted at all, and everything they'd
+        // otherwise exclude is scanned.
+        let dir = TempDir::new().unwrap();
+        // Deliberately no .git directory here - but guard against TMPDIR
+        // itself living inside a git repo (see test_issue_86 in
+        // config/file.rs for the same concern), which would make .gitignore
+        // apply and fail this test with a misleading assertion message.
+        assert!(
+            !dir.path().ancestors().any(|a| a.join(".git").exists()),
+            "TMPDIR is inside a git repo; this test cannot run here"
+        );
+        fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::write(dir.path().join("kept.txt"), "kept").unwrap();
+        fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[], false)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(
+            files
+                .iter()
+                .any(|f| f.to_string_lossy().contains("ignored.txt")),
+            "outside a git repo, .gitignore must not be consulted: {files:?}"
+        );
         assert!(files
             .iter()
             .any(|f| f.to_string_lossy().contains("kept.txt")));
