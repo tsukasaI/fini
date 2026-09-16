@@ -19,6 +19,8 @@
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
+            nativeBuildInputs = [ pkgs.git ];
+
             meta = with pkgs.lib; {
               description = "A lightweight file normalization CLI tool for AI coding agents";
               homepage = "https://github.com/tsukasaI/fini";
