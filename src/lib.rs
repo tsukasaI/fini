@@ -320,11 +320,17 @@ fn write_atomic(
         ));
     }
     // Renaming over a read-only file succeeds (directory permissions govern
-    // rename); refuse explicitly to preserve fs::write's permission semantics
-    if meta.permissions().readonly() {
+    // rename); refuse explicitly to preserve fs::write's permission
+    // semantics. Checking `meta.permissions().readonly()` (mode bits) isn't
+    // the same question as "can the current user write this file": a file
+    // owned by someone else with mode 0644 has its write bit set but still
+    // isn't writable by us, and `readonly()` would say false, letting the
+    // rename silently replace another user's file (issue #100). Actually
+    // opening for write is the same check `fs::write` itself would make.
+    if let Err(e) = fs::OpenOptions::new().write(true).open(path) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "permission denied (read-only file)",
+            format!("permission denied (cannot write): {e}"),
         ));
     }
 

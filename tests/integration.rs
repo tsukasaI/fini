@@ -867,6 +867,53 @@ fn test_exit_code_2_on_write_permission_error() {
     assert!(stderr.contains("Error writing"), "stderr: {stderr}");
 }
 
+// issue #100: write_atomic's read-only guard must check actual writability
+// (can the current process open this file for write?), not mode bits alone
+// (permissions().readonly(), i.e. "does the mode have any write bit set at
+// all?"). Those two questions diverge for a file owned by another user with
+// mode 0644: the write bit is set, but the current process still can't
+// write it. That scenario needs a second uid to reproduce for real; the
+// macOS "user immutable" flag (settable by the file's own owner, no root
+// needed) creates the same divergence without one - mode bits stay 0644
+// (readonly() reports false) while the OS refuses the write outright.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_issue_100() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("locked.txt");
+    fs::write(&file, "hello   \n").unwrap(); // trailing whitespace triggers a write
+
+    let mut perms = fs::metadata(&file).unwrap().permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&file, perms).unwrap();
+    assert!(Command::new("chflags")
+        .arg("uchg")
+        .arg(&file)
+        .status()
+        .unwrap()
+        .success());
+
+    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+
+    // Clear the flag so TempDir cleanup can remove the file.
+    Command::new("chflags")
+        .arg("nouchg")
+        .arg(&file)
+        .status()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "mode bits alone (0644) must not be trusted as proof of writability"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error writing"), "stderr: {stderr}");
+}
+
 // ===========================================
 // Phase 5: Exclude Patterns
 // ===========================================
