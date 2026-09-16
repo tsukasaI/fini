@@ -44,20 +44,28 @@ pub(super) fn remove_trailing_whitespace(content: &str) -> String {
         .join("\n")
 }
 
-/// Reproduces the two fixer transforms that run *before* trailing-whitespace
+/// Reproduces the fixer transforms that run *before* trailing-whitespace
 /// removal in the pipeline (zero-width-character removal, fullwidth-space
-/// conversion), so a caller deciding "would trailing-whitespace removal
-/// change this line" sees what the fixer sees rather than the raw line -
-/// e.g. a line ending in a fullwidth space becomes an ASCII space here
-/// first, exposing it to the `[' ', '\t']` trim exactly as the real pipeline
-/// would (issue #94's fix introduced this gap: matching the trim set alone
-/// wasn't enough once an earlier step could produce ASCII whitespace that
-/// wasn't there in the original line).
-pub(crate) fn line_after_pre_trim_fixes(line: &str) -> String {
-    let without_zero_width: String = line
-        .chars()
-        .filter(|c| !ZERO_WIDTH_CHARS.contains(c))
-        .collect();
+/// conversion) on a single line, so a caller deciding "would trailing-
+/// whitespace removal change this line" sees what the fixer sees rather
+/// than the raw line (issue #94). `remove_zero_width` must match the
+/// config's own setting - zero-width removal is optional (`--keep-zero-width`
+/// / `remove_zero_width = false`), unlike fullwidth-space conversion, which
+/// always runs.
+///
+/// Steps that can drop a line entirely (code-fence removal, leading/
+/// consecutive-blank-line limits) are deliberately not reproduced here: this
+/// only answers "is this line's own trailing whitespace trimmable", not
+/// "does this line survive at all". A leading BOM is a line *prefix* and
+/// never affects a trailing-whitespace check, so it needs no special case.
+pub(crate) fn line_after_pre_trim_fixes(line: &str, remove_zero_width: bool) -> String {
+    let without_zero_width: String = if remove_zero_width {
+        line.chars()
+            .filter(|c| !ZERO_WIDTH_CHARS.contains(c))
+            .collect()
+    } else {
+        line.to_string()
+    };
     without_zero_width.replace(FULLWIDTH_SPACE, " ")
 }
 
