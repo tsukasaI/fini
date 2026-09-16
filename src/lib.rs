@@ -320,11 +320,25 @@ fn write_atomic(
         ));
     }
     // Renaming over a read-only file succeeds (directory permissions govern
-    // rename); refuse explicitly to preserve fs::write's permission semantics
+    // rename); refuse explicitly to preserve fs::write's permission
+    // semantics. `meta.permissions().readonly()` (mode bits) alone isn't
+    // the same question as "can the current user write this file": a file
+    // owned by someone else with mode 0644 has its write bit set but still
+    // isn't writable by us, and `readonly()` would say false, letting the
+    // rename silently replace another user's file (issue #100). Keep the
+    // mode-bit check too (not replace it) - root can open a 0444 file for
+    // write (CAP_DAC_OVERRIDE), and this guard existed specifically to
+    // refuse rewriting a read-only file regardless of who's running fini.
     if meta.permissions().readonly() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "permission denied (read-only file)",
+        ));
+    }
+    if let Err(e) = fs::OpenOptions::new().write(true).open(path) {
+        return Err(io::Error::new(
+            e.kind(),
+            format!("cannot open for write: {e}"),
         ));
     }
 

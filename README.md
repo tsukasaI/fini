@@ -127,6 +127,11 @@ fini reads `.editorconfig` and warns if settings conflict with its fixed behavio
 | Consecutive blank lines | Limit to N blank lines (`--max-blank-lines`) | Off |
 | Code block remnants | Remove ``` markers (`--fix-code-blocks`) | Off |
 
+Files are written atomically (write to a temp file in the same directory,
+then rename over the original), which breaks any other hard link to the
+file - other links keep the pre-fix content, since rename only repoints the
+one directory entry fini wrote to.
+
 ## Inline Ignore
 
 Suppress detections per-line with `fini:ignore` directives. Works with any comment syntax.
