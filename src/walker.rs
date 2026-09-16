@@ -451,6 +451,34 @@ mod tests {
     }
 
     #[test]
+    fn test_issue_101_git_file_still_excluded_with_hidden() {
+        // A worktree or submodule checkout has ".git" as a *file* (a
+        // "gitdir: ..." pointer), not a directory - the always-added
+        // exclude pattern must match both forms.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(".git"),
+            "gitdir: /elsewhere/.git/worktrees/x\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join(".fini_test_hidden_marker"), "SECRET=1").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[], true)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains(".fini_test_hidden_marker")));
+        assert!(
+            !files.iter().any(|f| f.to_string_lossy().ends_with(".git")),
+            "{files:?}"
+        );
+    }
+
+    #[test]
     fn test_issue_101_gitignore_rescue_reaches_hidden_files_with_hidden() {
         // The issue #85 tracked-but-gitignored rescue must not silently
         // exempt dotfiles/dotdirs from --hidden: a secret committed under

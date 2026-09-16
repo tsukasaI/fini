@@ -179,7 +179,9 @@ ends up. `fini --check .` as a CI secret-detection gate therefore does not
 cover them unless you also pass `--hidden`, or check those paths directly
 (`fini --check .env`). The GitHub Action below doesn't expose `--hidden` as
 an input yet; pass hidden paths explicitly via `files` instead
-(`files: '. .env .github'`).
+(`files: '. .github'` - fini exits 2 on a path that doesn't exist, so only
+list paths you know are present, e.g. add `.env` only if it's tracked in
+your repo).
 
 ## Skipped
 
