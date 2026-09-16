@@ -21,6 +21,11 @@
 
             nativeBuildInputs = [ pkgs.git ];
 
+            # test_issue_100 shells out to macOS's /usr/bin/chflags, which
+            # isn't a nixpkgs package and isn't on PATH inside the sandboxed
+            # checkPhase.
+            checkFlags = [ "--skip=test_issue_100" ];
+
             meta = with pkgs.lib; {
               description = "A lightweight file normalization CLI tool for AI coding agents";
               homepage = "https://github.com/tsukasaI/fini";
