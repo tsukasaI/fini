@@ -78,7 +78,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     };
 
     let mut file_paths = vec![];
-    for entry in walk_paths(paths, &config.exclude_patterns)? {
+    for entry in walk_paths(paths, &config.exclude_patterns, config.include_hidden)? {
         match entry {
             Ok(path) => file_paths.push(path),
             Err(e) => {

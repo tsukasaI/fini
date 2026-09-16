@@ -17,6 +17,7 @@ use std::process::Command;
 pub fn walk_paths(
     paths: &[String],
     exclude_patterns: &[String],
+    include_hidden: bool,
 ) -> io::Result<impl Iterator<Item = io::Result<PathBuf>>> {
     let mut all_files = vec![];
     // Overlapping path arguments (e.g. `fini src src/a.rs`) can walk the same
@@ -62,16 +63,31 @@ pub fn walk_paths(
 
         let mut builder = WalkBuilder::new(path);
         builder
-            .hidden(true)
+            // Hidden files (dotfiles) are where secrets land most often
+            // (.env, .github/workflows/*.yml) - --hidden opts into scanning
+            // them too (issue #101). .git/ stays excluded either way: it's
+            // not something users want scanned regardless of that flag.
+            // git_ignore/git_global/git_exclude below still apply on top of
+            // --hidden: inside a real git repo, a user's own .gitignore or
+            // global excludes (many developers' global gitignore lists
+            // ".env" itself) can still hide a file --hidden would otherwise
+            // include - --hidden widens fini's own default, not the user's
+            // explicit ignore rules.
+            .hidden(!include_hidden)
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true);
 
-        let overrides_built = if exclude_patterns.is_empty() {
+        let mut patterns: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
+        if include_hidden {
+            patterns.push(".git/");
+        }
+
+        let overrides_built = if patterns.is_empty() {
             None
         } else {
             let mut overrides = OverrideBuilder::new(path);
-            for pattern in exclude_patterns {
+            for pattern in &patterns {
                 // OverrideBuilder uses inverted ! semantics:
                 // !pattern = exclude, pattern = whitelist
                 overrides.add(&format!("!{pattern}")).map_err(|e| {
@@ -336,7 +352,7 @@ mod tests {
         fs::write(&file_path, "hello").unwrap();
 
         let paths = vec![file_path.to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+        let files: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].is_ok());
@@ -350,7 +366,7 @@ mod tests {
         fs::write(dir.path().join("subdir/file2.txt"), "content2").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -365,13 +381,65 @@ mod tests {
         fs::write(dir.path().join(".hidden"), "hidden").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].to_string_lossy().contains("visible.txt"));
+    }
+
+    #[test]
+    fn test_issue_101() {
+        // --hidden (include_hidden=true) must include dotfiles like .env,
+        // where secrets land most often - the very thing hidden-by-default
+        // scanning was silently excluding from a `--check .` CI gate.
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("visible.txt"), "visible").unwrap();
+        fs::write(dir.path().join(".env"), "SECRET=1").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[], true)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.iter().any(|f| f.to_string_lossy().contains(".env")));
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains("visible.txt")));
+    }
+
+    #[test]
+    fn test_issue_101_git_dir_still_excluded_with_hidden() {
+        // .git/ must stay excluded even with --hidden - it's not something
+        // users want scanned, regardless of that flag.
+        //
+        // A real .git directory makes the walker's git_global(true) setting
+        // consult the machine's actual global gitignore - many developers'
+        // global gitignore excludes ".env" itself (a common convention), so
+        // that filename would make this test's outcome depend on the
+        // machine it runs on. Use an obscure name instead.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".git/config"), "git config").unwrap();
+        fs::write(dir.path().join(".fini_test_hidden_marker"), "SECRET=1").unwrap();
+
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let files: Vec<_> = walk_paths(&paths, &[], true)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains(".fini_test_hidden_marker")));
+        assert!(
+            !files.iter().any(|f| f.to_string_lossy().contains(".git")),
+            "{files:?}"
+        );
     }
 
     #[test]
@@ -382,7 +450,7 @@ mod tests {
         fs::write(dir.path().join(".git/config"), "git config").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -401,7 +469,7 @@ mod tests {
         fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -424,7 +492,7 @@ mod tests {
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["*.min.js".to_string(), "vendor/".to_string()];
-        let files: Vec<_> = walk_paths(&paths, &exclude)
+        let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -442,7 +510,7 @@ mod tests {
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["node_modules/".to_string()];
-        let files: Vec<_> = walk_paths(&paths, &exclude)
+        let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -464,7 +532,7 @@ mod tests {
             subdir.to_string_lossy().to_string(),
             file_path.to_string_lossy().to_string(),
         ];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -491,7 +559,7 @@ mod tests {
             subdir.to_string_lossy().to_string(),
             format!("{}/../dupdir", subdir.to_string_lossy()),
         ];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -522,7 +590,7 @@ mod tests {
             link.to_string_lossy().to_string(),
             target.to_string_lossy().to_string(),
         ];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -551,7 +619,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
 
         let paths = vec![link.to_string_lossy().to_string()];
-        let results: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+        let results: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
 
         assert!(
             results.iter().all(|r| r.is_err()),
@@ -571,7 +639,7 @@ mod tests {
         for suffix in ["/", "//", "/."] {
             let path_with_suffix = format!("{}{suffix}", link.to_string_lossy());
             let paths = vec![path_with_suffix.clone()];
-            let results: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+            let results: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
             assert!(
                 results.iter().all(|r| r.is_err()),
                 "{path_with_suffix:?} must also be refused, not walked: {results:?}"
@@ -592,7 +660,7 @@ mod tests {
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["[invalid".to_string()];
-        let result = walk_paths(&paths, &exclude);
+        let result = walk_paths(&paths, &exclude, false);
 
         let err = result.err().expect("invalid glob pattern should error");
         assert!(err.to_string().contains("invalid exclude pattern"));
@@ -615,7 +683,7 @@ mod tests {
         fs::set_permissions(&blocked_dir, perms.clone()).unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let entries: Vec<_> = walk_paths(&paths, &[]).unwrap().collect();
+        let entries: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
 
         // Restore permissions so TempDir cleanup can remove the directory.
         perms.set_mode(0o755);
@@ -664,7 +732,7 @@ mod tests {
         fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -691,7 +759,7 @@ mod tests {
         fs::write(dir.path().join("ignored.txt"), "never tracked").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -727,7 +795,7 @@ mod tests {
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["tracked.env".to_string()];
-        let files: Vec<_> = walk_paths(&paths, &exclude)
+        let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -762,7 +830,7 @@ mod tests {
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let exclude = vec!["vendor/".to_string()];
-        let files: Vec<_> = walk_paths(&paths, &exclude)
+        let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -803,7 +871,7 @@ mod tests {
         fs::write(dir.path().join(".gitignore"), ".env\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -842,7 +910,7 @@ mod tests {
         fs::write(dir.path().join(".gitignore"), "link.txt\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -892,7 +960,7 @@ mod tests {
         fs::write(dir.path().join(".gitignore"), "sub/\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[])
+        let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();

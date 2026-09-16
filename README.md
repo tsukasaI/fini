@@ -171,13 +171,22 @@ verbatim in a diff: be careful publishing CI logs that include `--diff` output.
 Disabling secret detection via `fini.toml` (`detect_secrets = false`) prints a
 warning to stderr that `--quiet` does not suppress.
 
+Directory scans skip hidden files by default (see Skipped below), including
+`.env` and `.github/workflows/*.yml`, two of the most common places a secret
+ends up. `fini --check .` as a CI secret-detection gate therefore does not
+cover them unless you also pass `--hidden`, or check those paths directly
+(`fini --check .env`).
+
 ## Skipped
 
 - Binary files (null bytes in first 8KB)
 - UTF-16 and other non-UTF-8 text files (unsupported encodings)
 - Symlinks (never followed or rewritten)
 - Empty files
-- Hidden files (`.foo`)
+- Hidden files (`.foo`); pass `--hidden` to include them (`.git/` is still
+  excluded either way). `--hidden` widens fini's own default, not your
+  `.gitignore`/global excludes: a file your own ignore rules already hide
+  (many developers' global gitignore lists `.env`) stays hidden regardless
 - `.git/` directory
 - `.gitignore` patterns
 
