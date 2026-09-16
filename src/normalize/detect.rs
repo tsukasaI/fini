@@ -113,6 +113,15 @@ pub(super) fn detect_todo_and_fixme_comments(
     let mut fixmes = Vec::new();
 
     for (line_idx, line) in content.lines().enumerate() {
+        // Only scan the part of the line before a fini:ignore(-next-line)
+        // directive: a kind name in the directive's own kind list (e.g.
+        // "fini:ignore-next-line todo") would otherwise be detected as a
+        // real TODO/FIXME marker on the directive's own line — a phantom
+        // problem that only exists because of the directive text itself
+        // (issue #95).
+        let line = line
+            .find(super::ignore::DIRECTIVE)
+            .map_or(line, |pos| &line[..pos]);
         if is_valid_marker(line, "TODO") {
             todos.push(Problem {
                 line: line_map[line_idx],

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::ProblemKind;
 
-const DIRECTIVE: &str = "fini:ignore";
+pub(super) const DIRECTIVE: &str = "fini:ignore";
 const NEXT_LINE_DIRECTIVE: &str = "fini:ignore-next-line";
 
 /// Tracks which lines have ignore directives and what kinds they suppress.
@@ -60,8 +60,13 @@ pub(super) fn parse_ignore_directives(content: &str, line_map: &[usize]) -> Igno
         let next_line_num = line_num + 1;
 
         if let Some(pos) = line.find(NEXT_LINE_DIRECTIVE) {
-            map.insert(line_num, None);
+            // The directive's own line gets the same kind restriction as
+            // the next line it targets, not an unconditional ignore-all:
+            // `fini:ignore-next-line todo` naming only "todo" must not also
+            // suppress an unrelated secret that happens to share the line
+            // with the directive itself (issue #95).
             let kinds = parse_kind_list(line, pos + NEXT_LINE_DIRECTIVE.len());
+            map.insert(line_num, kinds.clone());
             map.insert(next_line_num, kinds);
         } else if let Some(pos) = line.find(DIRECTIVE) {
             let kinds = parse_kind_list(line, pos + DIRECTIVE.len());

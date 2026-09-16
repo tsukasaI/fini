@@ -2341,3 +2341,65 @@ fn test_issue_93_stdin() {
         "masking should still visibly run on stdin, not just suppress the diff: {stderr:?}"
     );
 }
+
+// issue #95: `fini:ignore-next-line <kinds>` naming a specific kind must not
+// also suppress an unrelated problem kind that happens to share the
+// directive's own line, and the directive's own kind-list text ("todo" as a
+// kind name) must not itself be misdetected as a real TODO marker.
+#[test]
+fn test_issue_95() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("sup.py");
+    fs::write(
+        &file,
+        "TOKEN = \"sk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ\" # fini:ignore-next-line todo\nx = 1\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // `todo` was named, not `secret`, so the secret on the directive's own
+    // line must still be reported and the check must fail.
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("suppressed by fini:ignore"),
+        "a secret must not be suppressed by a directive naming only \"todo\": {stderr:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("potential secret"),
+        "the secret must still be reported: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("problems suppressed"),
+        "no phantom suppression should be counted: {stdout:?}"
+    );
+}
+
+// issue #95: a clean file with only a `fini:ignore-next-line <kind>`
+// directive must report zero suppressed problems - the directive's own
+// kind-list text must not be misdetected as a marker and then "suppressed".
+#[test]
+fn test_issue_95_no_phantom_suppression_on_clean_file() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("k.py");
+    fs::write(&file, "# fini:ignore-next-line todo\nx = 1\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("problems suppressed"),
+        "a clean file must report zero suppressed problems: {stdout:?}"
+    );
+}
