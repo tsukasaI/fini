@@ -218,8 +218,11 @@ never fails on detection-only problems (TODOs, debug code, secrets) — always u
     check: 'true'                # Check mode, fail if issues found (default: true)
     version: 'v0.3.0'            # Specific version (default: latest)
     verify-attestation: 'false'  # Verify SLSA build provenance via `gh attestation verify`
-                                 # (default: false). Set to 'true' once your pinned fini
-                                 # version has attestations (releases after v0.3.0).
+                                 # (defaults to true as of the version of this action that
+                                 # ships this comment). The default `version: latest` always
+                                 # resolves to an attested release, so this only needs
+                                 # setting to 'false' if you pin `version` to a release
+                                 # before v0.4.0, which predates attestations.
 ```
 
 ## VS Code Extension
