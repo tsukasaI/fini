@@ -2237,6 +2237,33 @@ fn test_issue_94_keep_zero_width() {
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello \u{200b}\n");
 }
 
+// Sibling of test_issue_94_keep_zero_width: the same input, without the
+// flag, must still be reported and trimmed - default (remove_zero_width =
+// true) behavior must not have regressed while fixing the flag-off case.
+#[test]
+fn test_issue_94_default_zero_width_removal_still_trims() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello \u{200b}").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("trailing whitespace"),
+        "without --keep-zero-width, the ZWSP is removed first, exposing the \
+         space as genuinely trailing: {stdout:?}"
+    );
+
+    let fix_output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(fix_output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
+}
+
 // issue #93: TOML `detect_secrets = false` disables *detection*, but must
 // not also disable masking a secret's raw value out of --diff output -
 // masking is an output guarantee, not part of the detection feature.
