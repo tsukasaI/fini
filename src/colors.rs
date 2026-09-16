@@ -41,6 +41,15 @@ impl Colors {
     }
 }
 
+/// Per the no-color.org spec: NO_COLOR disables color only when it's set
+/// *and non-empty* - some shell rc files set `NO_COLOR=` as a "reset to
+/// default" no-op, which must not be read as "disable color" (issue #102).
+/// Takes the raw env value (rather than reading the env itself) so this
+/// decision is testable without mutating process-global env state.
+fn no_color_env_disables(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty())
+}
+
 pub fn should_use_colors(force_color: bool, no_color: bool) -> bool {
     // Priority: --no-color > --color > NO_COLOR env > TTY detection
     if no_color {
@@ -49,8 +58,26 @@ pub fn should_use_colors(force_color: bool, no_color: bool) -> bool {
     if force_color {
         return true;
     }
-    if std::env::var("NO_COLOR").is_ok() {
+    // var_os (not var) so a non-UTF-8 but still non-empty value still
+    // counts as "set".
+    if no_color_env_disables(std::env::var_os("NO_COLOR").as_deref()) {
         return false;
     }
     io::stdout().is_terminal()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_issue_102() {
+        assert!(!no_color_env_disables(None), "unset must not disable color");
+        assert!(
+            !no_color_env_disables(Some(std::ffi::OsStr::new(""))),
+            "NO_COLOR set but empty must not disable color, per the no-color.org spec"
+        );
+        assert!(no_color_env_disables(Some(std::ffi::OsStr::new("1"))));
+        assert!(no_color_env_disables(Some(std::ffi::OsStr::new("0"))));
+    }
 }
