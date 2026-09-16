@@ -2477,3 +2477,56 @@ fn test_issue_97() {
         "the `latest` version lookup must authenticate its GitHub API call"
     );
 }
+
+// issue #98: closing stdout early (e.g. `fini --quiet dir | head -1`) must
+// not panic. Rust's runtime ignores SIGPIPE by default, so a write to a
+// closed pipe used to surface as an io::Error that a println!/write!
+// .expect() turned into a panic (exit 101, not in the README's exit-code
+// table), after only partially processing fix mode's file list.
+#[cfg(unix)]
+#[test]
+fn test_issue_98() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    for i in 0..2000 {
+        fs::write(dir.path().join(format!("f{i}.txt")), "a   \n").unwrap();
+    }
+
+    let mut child = fini_cmd()
+        .arg("--quiet")
+        .arg(dir.path().to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Read only the first line, then drop our end of the pipe while fini
+    // likely still has most of the file list left to process/print.
+    {
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+    }
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+
+    assert!(
+        !stderr.contains("panicked"),
+        "must not panic on a closed stdout pipe: {stderr:?}"
+    );
+    assert_ne!(
+        status.code(),
+        Some(101),
+        "must not exit with a Rust panic's default code: {stderr:?}"
+    );
+}

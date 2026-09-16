@@ -11,6 +11,25 @@ use fini::{
     CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
 };
 
+/// Rust's runtime sets SIGPIPE to SIG_IGN on startup so a write() to a
+/// closed pipe (e.g. `fini --quiet dir | head -1`) returns an `io::Error`
+/// instead of terminating the process - which then surfaced as an
+/// `.expect()` panic (exit 101, not in the README's exit-code table) on the
+/// very next `println!`/`write!` call, after only partially processing fix
+/// mode's file list. Restoring the default disposition makes fini die the
+/// same way any other Unix text-filter tool does when its output pipe
+/// closes early: killed by the signal, no panic message (issue #98).
+/// A no-op on non-Unix targets, where this signal doesn't exist.
+#[cfg(unix)]
+fn reset_sigpipe_to_default() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe_to_default() {}
+
 #[derive(Parser)]
 #[command(name = "fini")]
 #[command(version, about = "A lightweight file normalization CLI tool")]
@@ -105,6 +124,8 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    reset_sigpipe_to_default();
+
     let cli = Cli::parse();
 
     if cli.init {
