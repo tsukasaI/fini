@@ -2715,6 +2715,10 @@ fn test_issue_103() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
+        output.status.success(),
+        "the oversized file must be skipped, not reported as a --check problem: {stdout:?}"
+    );
+    assert!(
         stdout.contains("too large"),
         "the oversized file must be reported as skipped: {stdout:?}"
     );

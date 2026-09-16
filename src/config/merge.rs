@@ -180,6 +180,10 @@ mod tests {
         assert!(!config.strict_debug);
         assert!(config.detect_secrets);
         assert_eq!(config.max_line_length, None);
+        assert_eq!(
+            config.max_file_size,
+            crate::normalize::DEFAULT_MAX_FILE_SIZE
+        );
     }
 
     #[test]
@@ -191,6 +195,7 @@ mod tests {
             strict_debug: Some(true),
             detect_secrets: Some(false),
             max_line_length: Some(120),
+            max_file_size: Some(1024),
             ..Default::default()
         };
 
@@ -202,6 +207,7 @@ mod tests {
         assert!(config.strict_debug);
         assert!(!config.detect_secrets);
         assert_eq!(config.max_line_length, Some(120));
+        assert_eq!(config.max_file_size, 1024);
     }
 
     #[test]
@@ -211,6 +217,7 @@ mod tests {
             no_detect_debug: Some(false), // explicitly enable
             strict_debug: Some(true),
             max_line_length: Some(80),
+            max_file_size: Some(512),
             ..Default::default()
         };
         let toml = NormalizeSection {
@@ -218,6 +225,7 @@ mod tests {
             detect_debug: Some(false),
             strict_debug: Some(false),
             max_line_length: Some(120),
+            max_file_size: Some(1024),
             ..Default::default()
         };
 
@@ -227,6 +235,7 @@ mod tests {
         assert!(config.detect_debug); // CLI no_detect=false -> detect=true
         assert!(config.strict_debug); // CLI wins
         assert_eq!(config.max_line_length, Some(80)); // CLI wins
+        assert_eq!(config.max_file_size, 512); // CLI wins
     }
 
     #[test]

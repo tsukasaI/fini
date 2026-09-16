@@ -189,5 +189,6 @@ mod tests {
         assert_eq!(config.normalize.strict_debug, Some(false));
         assert_eq!(config.normalize.detect_secrets, Some(true));
         assert_eq!(config.normalize.max_line_length, Some(120));
+        assert_eq!(config.normalize.max_file_size, Some(10_485_760));
     }
 }
