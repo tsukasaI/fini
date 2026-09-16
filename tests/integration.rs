@@ -2440,21 +2440,40 @@ fn test_issue_97() {
         fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("action.yaml"))
             .unwrap();
 
-    let verify_attestation_input = action_yaml
-        .split("verify-attestation:")
-        .nth(1)
+    let block_start = action_yaml
+        .find("verify-attestation:")
         .expect("action.yaml must define a verify-attestation input");
-    let default_line = verify_attestation_input
+    let key_indent = action_yaml[..block_start]
+        .rfind('\n')
+        .map_or(block_start, |nl| block_start - nl - 1);
+    // Scope the scan to this input's own indented block: every following
+    // line indented further than the key itself, stopping at the first
+    // line indented the same or less (the next sibling input, or the end
+    // of the `inputs:` map).
+    let default_line = action_yaml[block_start..]
         .lines()
+        .skip(1)
+        .take_while(|l| {
+            l.trim().is_empty() || l.chars().take_while(|c| *c == ' ').count() > key_indent
+        })
         .find(|l| l.trim_start().starts_with("default:"))
         .expect("verify-attestation must set a default");
-    assert!(
-        default_line.contains("'true'"),
+    let value = default_line
+        .split_once(':')
+        .unwrap()
+        .1
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"');
+    assert_eq!(
+        value, "true",
         "verify-attestation must default to 'true': {default_line:?}"
     );
 
     assert!(
-        action_yaml.contains(r#"curl -fsSL -H "Authorization: Bearer $GH_TOKEN""#),
+        action_yaml
+            .lines()
+            .any(|l| l.contains("Authorization: Bearer $GH_TOKEN")
+                && l.contains("repos/tsukasaI/fini/releases/latest")),
         "the `latest` version lookup must authenticate its GitHub API call"
     );
 }
