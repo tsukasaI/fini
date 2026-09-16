@@ -78,9 +78,7 @@ pub fn walk_paths(
             // WalkBuilder's `require_git` defaults to true, so a directory
             // with no `.git` ancestor (a `git archive` export, an extracted
             // tarball) has its .gitignore files ignored entirely - deliberate
-            // (matches issue #86's scoping of config discovery to the same
-            // boundary), but the README used to describe this as
-            // unconditional (issue #105).
+            // (issue #86, issue #105).
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true);
@@ -130,9 +128,9 @@ pub fn walk_paths(
         // issue #85: a file already tracked by git stays tracked even after
         // it's added to .gitignore (git itself ignores .gitignore for paths
         // it already tracks) — but the walk above honors .gitignore
-        // unconditionally, so such a file (and any secret in it) was
-        // silently skipped. Re-add tracked files under this path that the
-        // walk excluded *only because of .gitignore*. This replicates the
+        // regardless of tracked status, so such a file (and any secret in
+        // it) was silently skipped. Re-add tracked files under this path
+        // that the walk excluded *only because of .gitignore*. This replicates the
         // primary walk's other filtering (hidden files unless --hidden,
         // --exclude/config overrides, never following a symlink) as closely
         // as a second, non-walking pass reasonably can; known carve-out: a
@@ -585,10 +583,16 @@ mod tests {
         // require_git defaults to true. Outside one (no .git ancestor: a
         // `git archive` export, an extracted tarball, a plain directory),
         // .gitignore files are not consulted at all, and everything they'd
-        // otherwise exclude is scanned. This pins that behavior, which the
-        // README previously described as unconditional.
+        // otherwise exclude is scanned.
         let dir = TempDir::new().unwrap();
-        // Deliberately no .git directory here.
+        // Deliberately no .git directory here - but guard against TMPDIR
+        // itself living inside a git repo (see test_issue_86 in
+        // config/file.rs for the same concern), which would make .gitignore
+        // apply and fail this test with a misleading assertion message.
+        assert!(
+            !dir.path().ancestors().any(|a| a.join(".git").exists()),
+            "TMPDIR is inside a git repo; this test cannot run here"
+        );
         fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
         fs::write(dir.path().join("kept.txt"), "kept").unwrap();
         fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
