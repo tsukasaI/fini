@@ -119,20 +119,15 @@ pub fn print_check_result(
     if ctx.mode == OutputMode::Diff {
         // Mirrors print_fix_result's Diff branch: masked the same way
         // (issue #44's contract applies to every diff path, not just fix
-        // mode). Unlike print_fix_result, we don't return early: detection-
-        // only problems (TODO/FIXME/debug/secret/long-line) never change
-        // result.content, so there's no diff to show them in — they're only
-        // visible via the problem list below, which must still run. When
-        // there IS a content diff, skip the empty `---`/`+++` header instead
-        // of printing a diff with no body.
-        if result.has_changes() {
-            let (orig, new) = masked_pair(original, &result.content);
+        // mode). Every path here must attach a filename to the problem list
+        // below (issue #104): print the masked diff when there's a change
+        // masking doesn't collapse to identical text, otherwise an `Error:`
+        // header - `lib.rs` only reaches this function when has_changes()
+        // or the problem list is non-empty, so one of the two always fires.
+        let (orig, new) = masked_pair(original, &result.content);
+        if orig != new {
             print_diff(&safe_path_display(path), &orig, &new);
-        } else if !result.problems.is_empty() {
-            // No diff to show (detection-only problems change no content),
-            // but the problem list below still needs a filename to attach
-            // to - without this, multiple files' problems ran together with
-            // no way to tell which line belonged to which file (issue #104).
+        } else {
             println!(
                 "{}Error:{} {}",
                 ctx.colors.error,

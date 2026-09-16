@@ -2777,12 +2777,20 @@ fn test_issue_104() {
     assert!(!output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let a_pos = stdout.find("a.py");
+    let todo_pos = stdout.find("TODO comment");
+    let b_pos = stdout.find("b.py");
+    let secret_pos = stdout.find("potential secret");
     assert!(
-        stdout.contains("a.py"),
-        "must name the file the TODO belongs to: {stdout:?}"
+        a_pos.is_some() && todo_pos.is_some() && a_pos < todo_pos,
+        "the a.py header must precede its TODO line: {stdout:?}"
     );
     assert!(
-        stdout.contains("b.py"),
-        "must name the file the secret belongs to: {stdout:?}"
+        b_pos.is_some() && secret_pos.is_some() && b_pos < secret_pos,
+        "the b.py header must precede its secret line: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("hunter2hunter2"),
+        "the raw secret value must never reach --diff output: {stdout:?}"
     );
 }
