@@ -44,6 +44,23 @@ pub(super) fn remove_trailing_whitespace(content: &str) -> String {
         .join("\n")
 }
 
+/// Reproduces the two fixer transforms that run *before* trailing-whitespace
+/// removal in the pipeline (zero-width-character removal, fullwidth-space
+/// conversion), so a caller deciding "would trailing-whitespace removal
+/// change this line" sees what the fixer sees rather than the raw line -
+/// e.g. a line ending in a fullwidth space becomes an ASCII space here
+/// first, exposing it to the `[' ', '\t']` trim exactly as the real pipeline
+/// would (issue #94's fix introduced this gap: matching the trim set alone
+/// wasn't enough once an earlier step could produce ASCII whitespace that
+/// wasn't there in the original line).
+pub(crate) fn line_after_pre_trim_fixes(line: &str) -> String {
+    let without_zero_width: String = line
+        .chars()
+        .filter(|c| !ZERO_WIDTH_CHARS.contains(c))
+        .collect();
+    without_zero_width.replace(FULLWIDTH_SPACE, " ")
+}
+
 pub(super) fn normalize_eof_newline(content: &str) -> String {
     if content.is_empty() {
         return String::new();

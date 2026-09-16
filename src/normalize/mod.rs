@@ -13,6 +13,8 @@ use fix::{
     remove_trailing_whitespace, remove_zero_width_chars,
 };
 
+pub(crate) use fix::line_after_pre_trim_fixes;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizeConfig {
     /// None = no limit

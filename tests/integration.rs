@@ -2151,6 +2151,11 @@ fn test_issue_94() {
         .arg(file.to_str().unwrap())
         .output()
         .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the file has no reportable problem, so --check should pass cleanly"
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -2160,8 +2165,38 @@ fn test_issue_94() {
 
     // Confirm the fixer really does leave it untouched, so the check above
     // is verifying consistency and not just an absence of any report.
-    fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    let fix_output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(fix_output.status.success());
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello\u{a0}\n");
+}
+
+// issue #94 (follow-up): the reverse false-negative. A line ending in a
+// fullwidth space (U+3000) has no ASCII space/tab at the raw-line level,
+// but the fixer's earlier fullwidth-space-conversion step (issue #78's
+// pipeline, step 6) turns it into one before trailing-whitespace removal
+// runs (step 7) - so the fixer *does* trim it, and --check must say so.
+#[test]
+fn test_issue_94_fullwidth_space_trailing() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello\u{3000}\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("trailing whitespace"),
+        "a trailing fullwidth space becomes trimmable ASCII whitespace \
+         once fullwidth-space conversion runs first, and must be reported: {stdout:?}"
+    );
+
+    let fix_output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
+    assert!(fix_output.status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
 }
 
 // issue #93: TOML `detect_secrets = false` disables *detection*, but must

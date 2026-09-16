@@ -1,5 +1,8 @@
 use crate::colors::Colors;
-use crate::normalize::{mask_secret_lines, NormalizeConfig, NormalizeResult, Problem, ProblemKind};
+use crate::normalize::{
+    line_after_pre_trim_fixes, mask_secret_lines, NormalizeConfig, NormalizeResult, Problem,
+    ProblemKind,
+};
 use similar::{ChangeTag, TextDiff};
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -184,12 +187,15 @@ pub fn print_change_summary_to<W: Write>(
     }
 
     for (i, orig_line) in original_lf.lines().enumerate() {
-        // Must match remove_trailing_whitespace's own trim set (ASCII space
-        // and tab only) - str::trim_end() also strips other Unicode
-        // whitespace (e.g. U+00A0 NBSP), which the fixer never touches, so
-        // using it here reported "trailing whitespace" for lines fix mode
-        // wouldn't actually change (issue #94).
-        if orig_line.len() != orig_line.trim_end_matches([' ', '\t']).len() {
+        // Must reflect what the fixer actually sees at the trailing-
+        // whitespace step, not the raw line: str::trim_end() strips any
+        // Unicode whitespace (over-reporting a line the fixer never
+        // touches, e.g. one ending in U+00A0), while checking the raw
+        // line's own ASCII space/tab under-reports a line whose trailing
+        // whitespace only appears after an earlier fixer step runs (e.g.
+        // fullwidth-space conversion exposes an ASCII space) (issue #94).
+        let after_earlier_fixes = line_after_pre_trim_fixes(orig_line);
+        if after_earlier_fixes.len() != after_earlier_fixes.trim_end_matches([' ', '\t']).len() {
             writeln!(w, "  - trailing whitespace at line {}", i + 1)?;
         }
     }
