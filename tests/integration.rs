@@ -2427,3 +2427,34 @@ fn test_issue_96() {
         "PATH must point at the dedicated install directory"
     );
 }
+
+// issue #97: verify-attestation must default to 'true' - the action's own
+// default `version: latest` always resolves to an attested release, so a
+// security control here should default to fail-closed rather than require
+// an explicit opt-in. The `latest` version lookup must also authenticate
+// its GitHub API call, since the unauthenticated rate limit (60/hour per
+// IP, shared across a whole runner pool) made it intermittently fail.
+#[test]
+fn test_issue_97() {
+    let action_yaml =
+        fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("action.yaml"))
+            .unwrap();
+
+    let verify_attestation_input = action_yaml
+        .split("verify-attestation:")
+        .nth(1)
+        .expect("action.yaml must define a verify-attestation input");
+    let default_line = verify_attestation_input
+        .lines()
+        .find(|l| l.trim_start().starts_with("default:"))
+        .expect("verify-attestation must set a default");
+    assert!(
+        default_line.contains("'true'"),
+        "verify-attestation must default to 'true': {default_line:?}"
+    );
+
+    assert!(
+        action_yaml.contains(r#"curl -fsSL -H "Authorization: Bearer $GH_TOKEN""#),
+        "the `latest` version lookup must authenticate its GitHub API call"
+    );
+}
