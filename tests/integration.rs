@@ -872,10 +872,12 @@ fn test_exit_code_2_on_write_permission_error() {
 // (permissions().readonly(), i.e. "does the mode have any write bit set at
 // all?"). Those two questions diverge for a file owned by another user with
 // mode 0644: the write bit is set, but the current process still can't
-// write it. That scenario needs a second uid to reproduce for real; the
-// macOS "user immutable" flag (settable by the file's own owner, no root
-// needed) creates the same divergence without one - mode bits stay 0644
-// (readonly() reports false) while the OS refuses the write outright.
+// write it. That full scenario needs a second uid to reproduce for real.
+// macOS's "user immutable" flag (settable by the file's own owner, no root
+// needed) reproduces the mode-bits-say-writable half without one - but it
+// also blocks the eventual rename, unlike the real cross-user case, so this
+// only proves the new open-for-write probe is what rejects the file (see
+// the stderr assertion below), not that it prevented a silent replacement.
 #[cfg(target_os = "macos")]
 #[test]
 fn test_issue_100() {
@@ -895,15 +897,18 @@ fn test_issue_100() {
         .status()
         .unwrap()
         .success());
+    // Clears the immutable flag on drop even if a later assertion panics,
+    // so a failure here doesn't leave an undeletable file behind for
+    // TempDir's own Drop to fail on.
+    struct ClearImmutableOnDrop(std::path::PathBuf);
+    impl Drop for ClearImmutableOnDrop {
+        fn drop(&mut self) {
+            let _ = Command::new("chflags").arg("nouchg").arg(&self.0).status();
+        }
+    }
+    let _clear_on_drop = ClearImmutableOnDrop(file.clone());
 
     let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
-
-    // Clear the flag so TempDir cleanup can remove the file.
-    Command::new("chflags")
-        .arg("nouchg")
-        .arg(&file)
-        .status()
-        .unwrap();
 
     assert_eq!(
         output.status.code(),
@@ -911,7 +916,15 @@ fn test_issue_100() {
         "mode bits alone (0644) must not be trusted as proof of writability"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Error writing"), "stderr: {stderr}");
+    // Specifically the new open-for-write probe's own message, not just
+    // "some write error occurred" - chflags uchg also blocks the eventual
+    // rename, so a generic io-error assertion here would pass even with
+    // the fix reverted (persist() would still fail, just later and with a
+    // different message).
+    assert!(
+        stderr.contains("cannot open for write"),
+        "the write-probe guard, not just a later rename failure, must be what rejects this: {stderr}"
+    );
 }
 
 // ===========================================
