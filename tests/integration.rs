@@ -2163,3 +2163,81 @@ fn test_issue_94() {
     fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello\u{a0}\n");
 }
+
+// issue #93: TOML `detect_secrets = false` disables *detection*, but must
+// not also disable masking a secret's raw value out of --diff output -
+// masking is an output guarantee, not part of the detection feature.
+#[test]
+fn test_issue_93() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\ndetect_secrets = false\n",
+    )
+    .unwrap();
+    let file = dir.path().join("secret.txt");
+    // A second, unrelated line with trailing whitespace produces a real
+    // diff; the secret line alone wouldn't show one, since masking replaces
+    // both sides of that line identically regardless of the whitespace fix.
+    fs::write(&file, "password = \"hunter2hunter2\"\nother line   \n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--diff")
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("hunter2hunter2"),
+        "the raw secret value must never reach --diff output, even with detect_secrets = false: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("[line masked: potential"),
+        "masking should still run: {stdout:?}"
+    );
+}
+
+// issue #93: same guarantee on the --stdin --check --diff path.
+#[test]
+fn test_issue_93_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\ndetect_secrets = false\n",
+    )
+    .unwrap();
+
+    let mut child = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--stdin")
+        .arg("--check")
+        .arg("--diff")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"password = \"hunter2hunter2\"\nother line   \n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("hunter2hunter2"),
+        "the raw secret value must never reach --stdin --diff output either: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("[line masked: potential"),
+        "masking should still visibly run on stdin, not just suppress the diff: {stderr:?}"
+    );
+}
