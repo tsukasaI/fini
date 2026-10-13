@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -213,6 +214,13 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
         .collect()
 }
 
+/// Zero-width characters ignored by the secret-match decision in
+/// `mask_secret_lines`. Mirrors `fix::ZERO_WIDTH_CHARS` (including a BOM at
+/// position 0, which the fixer preserves but masking must still see through).
+const MASK_ZERO_WIDTH_CHARS: &[char] = &[
+    '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{2060}', '\u{FEFF}',
+];
+
 /// Replace every line matching a secret pattern with a hint-only placeholder.
 ///
 /// The checker deliberately reports secrets hint-only (the matched value never
@@ -223,15 +231,27 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
 /// a skip pattern only decides whether a match is *reported*, never whether a
 /// diff shows raw secret-shaped text — an unrelated trailing comment (or any
 /// other skip-pattern occurrence) must not un-mask a real secret (issue #77).
+///
+/// Zero-width characters are stripped from each line before the match
+/// decision, regardless of `--keep-zero-width`: a zero-width char inside a
+/// secret (e.g. `hunter<ZWSP>2hunter2`) would otherwise split the value so no
+/// regex matches and the raw line leaks into the diff (issue #156). Only the
+/// decision uses the stripped text; a masked line is replaced wholesale and an
+/// unmatched line is emitted unchanged.
 pub(super) fn mask_secret_lines(content: &str) -> String {
     let patterns = &*SECRET_PATTERNS;
     let mut out = String::with_capacity(content.len());
 
     for line in content.split_inclusive('\n') {
         let text = line.strip_suffix('\n').unwrap_or(line);
+        let stripped: Cow<str> = if text.contains(MASK_ZERO_WIDTH_CHARS) {
+            Cow::Owned(text.replace(MASK_ZERO_WIDTH_CHARS, ""))
+        } else {
+            Cow::Borrowed(text)
+        };
         let hint = patterns
             .iter()
-            .find(|p| p.regex.is_match(text))
+            .find(|p| p.regex.is_match(&stripped))
             .map(|p| p.hint);
 
         match hint {
@@ -548,6 +568,15 @@ mod tests {
         assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
         let masked = mask_secret_lines(content);
         assert!(!masked.contains("process.env.API_KEY"));
+        assert!(masked.contains("[line masked: potential hardcoded secret]"));
+    }
+
+    // issue #156: a zero-width char inside the value must not hide the secret.
+    #[test]
+    fn test_mask_secret_lines_masks_secret_split_by_zero_width() {
+        let masked = mask_secret_lines("password = \"hunter\u{200B}2hunter2\"\n");
+        assert!(!masked.contains("hunter\u{200B}2hunter2"));
+        assert!(!masked.contains("hunter2hunter2"));
         assert!(masked.contains("[line masked: potential hardcoded secret]"));
     }
 
