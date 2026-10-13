@@ -1,4 +1,4 @@
-use ignore::overrides::OverrideBuilder;
+use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -138,83 +138,92 @@ pub fn walk_paths(
         // so a tracked file it excludes is still rescued.
         let root = Path::new(path);
         if root.is_dir() {
-            for rel in git_tracked_files_relative(root) {
-                // `git ls-files` prints index entries verbatim — git
-                // validates a path when it's added, not when the index is
-                // read back, so a hand-crafted .git/index (a shipped tarball,
-                // not a clone) could contain an absolute path or a `..`
-                // component. root.join() on such a path would discard root
-                // entirely, so reject anything but plain path components
-                // before it's ever joined.
-                if !is_plain_relative_path(&rel) {
-                    continue;
-                }
-
-                // Mirrors builder.hidden(!include_hidden): skip any path
-                // with a dotfile/dotdir component, unless --hidden opted
-                // into scanning those too (issue #101) - a tracked-and-
-                // gitignored secret under a dotfile/dotdir (.env,
-                // .github/workflows/*.yml) is exactly the #101 scenario
-                // this rescue must not silently exempt.
-                if !include_hidden
-                    && rel
-                        .components()
-                        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-                {
-                    continue;
-                }
-
-                let abs = root.join(&rel);
-
-                // Cheap dedup check first: the vast majority of tracked
-                // files were already found by the primary walk, so skip the
-                // lstat-per-ancestor work below for those.
-                let key = dedup_key(&abs, &mut canon_parent_cache);
-                if seen.contains(&key) {
-                    continue;
-                }
-
-                // A directory-level exclude (e.g. "vendor/") prunes the
-                // directory in the primary walk before any file under it is
-                // ever tested; a symlinked intermediate directory is never
-                // descended into by the primary walk either (issue #35). Both
-                // are properties of the path itself, so check every ancestor
-                // between the file and root — not just the file path — for
-                // either.
-                let ancestor_blocked =
-                    abs.ancestors().skip(1).take_while(|a| *a != root).any(|a| {
-                        fs::symlink_metadata(a)
-                            .map(|m| m.is_symlink())
-                            .unwrap_or(true)
-                            || overrides_built
-                                .as_ref()
-                                .is_some_and(|o| o.matched(a, true).is_ignore())
-                    });
-                if ancestor_blocked {
-                    continue;
-                }
-                if overrides_built
-                    .as_ref()
-                    .is_some_and(|o| o.matched(&abs, false).is_ignore())
-                {
-                    continue;
-                }
-
-                // symlink_metadata (not metadata): the primary walk never
-                // follows symlinks into content outside the tree (issue
-                // #35), so this rescue must not either.
-                let is_file = fs::symlink_metadata(&abs)
-                    .map(|m| m.is_file())
-                    .unwrap_or(false);
-                if is_file {
-                    seen.insert(key);
-                    all_files.push(Ok(abs));
-                }
-            }
+            rescue_tracked_files(
+                root,
+                include_hidden,
+                overrides_built.as_ref(),
+                &mut seen,
+                &mut canon_parent_cache,
+                &mut all_files,
+            );
         }
     }
 
     Ok(all_files.into_iter())
+}
+
+/// Mirrors `builder.hidden(!include_hidden)`: any dotfile/dotdir component.
+fn has_hidden_component(rel: &Path) -> bool {
+    rel.components()
+        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+}
+
+fn is_override_ignored(overrides: Option<&Override>, path: &Path, is_dir: bool) -> bool {
+    overrides.is_some_and(|o| o.matched(path, is_dir).is_ignore())
+}
+
+fn rescue_tracked_files(
+    root: &Path,
+    include_hidden: bool,
+    overrides: Option<&Override>,
+    seen: &mut HashSet<PathBuf>,
+    canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+    all_files: &mut Vec<io::Result<PathBuf>>,
+) {
+    for rel in git_tracked_files_relative(root) {
+        // `git ls-files` prints index entries verbatim; git validates a
+        // path when it's added, not when the index is read back, so a
+        // hand-crafted .git/index (a shipped tarball, not a clone) could
+        // hold an absolute path or a `..` component. root.join() on such a
+        // path would discard root entirely, so reject anything but plain
+        // components before it's ever joined.
+        if !is_plain_relative_path(&rel) {
+            continue;
+        }
+
+        // Hidden paths are skipped unless --hidden: a tracked-and-gitignored
+        // file under .env or .github/workflows/ is exactly the #101 case.
+        if !include_hidden && has_hidden_component(&rel) {
+            continue;
+        }
+
+        let abs = root.join(&rel);
+
+        // Cheap dedup first: most tracked files were already found by the
+        // primary walk, so skip the lstat-per-ancestor work below for those.
+        let key = dedup_key(&abs, canon_parent_cache);
+        if seen.contains(&key) {
+            continue;
+        }
+
+        // The primary walk prunes an excluded directory before testing any
+        // file under it, and never descends a symlinked directory (issue
+        // #35). Both are properties of the path, so check every ancestor
+        // between the file and root, not just the file path.
+        let ancestor_blocked = abs.ancestors().skip(1).take_while(|a| *a != root).any(|a| {
+            fs::symlink_metadata(a)
+                .map(|m| m.is_symlink())
+                .unwrap_or(true)
+                || is_override_ignored(overrides, a, true)
+        });
+        if ancestor_blocked {
+            continue;
+        }
+        if is_override_ignored(overrides, &abs, false) {
+            continue;
+        }
+
+        // symlink_metadata (not metadata): the primary walk never follows
+        // symlinks into content outside the tree (issue #35), so neither
+        // may this rescue.
+        let is_file = fs::symlink_metadata(&abs)
+            .map(|m| m.is_file())
+            .unwrap_or(false);
+        if is_file {
+            seen.insert(key);
+            all_files.push(Ok(abs));
+        }
+    }
 }
 
 /// Lists files tracked by git under `root`, as paths relative to `root`.
