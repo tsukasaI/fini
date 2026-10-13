@@ -486,6 +486,19 @@ mod tests {
     }
 
     #[test]
+    fn test_whitespace_only_normalizes_in_one_pass_when_keeping_leading_blanks() {
+        let config = NormalizeConfig {
+            remove_leading_blanks: false,
+            ..NormalizeConfig::default()
+        };
+        for input in ["\n \n", "\r\r", "\n\n\n"] {
+            let once = normalize_content(input, &config).content;
+            assert_eq!(once, "", "input {input:?}");
+            assert_eq!(normalize_content(&once, &config).content, once);
+        }
+    }
+
+    #[test]
     fn test_remove_zwsp() {
         let input = "hello\u{200B}world\n";
         let result = normalize_content(input, &NormalizeConfig::default());

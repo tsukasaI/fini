@@ -74,6 +74,9 @@ pub(super) fn normalize_eof_newline(content: &str) -> String {
         return String::new();
     }
     let trimmed = content.trim_end_matches('\n');
+    if trimmed.is_empty() {
+        return String::new();
+    }
     format!("{trimmed}\n")
 }
 
