@@ -117,12 +117,7 @@ pub(super) fn remove_leading_blank_lines(
         vec![]
     };
 
-    let result = format!(
-        "{bom}{}",
-        lines
-            .get(first_non_blank..)
-            .map_or(String::new(), |rest| rest.join("\n"))
-    );
+    let result = format!("{bom}{}", lines[first_non_blank..].join("\n"));
     let new_line_map = line_map[first_non_blank..].to_vec();
 
     (result, new_line_map, problems)
@@ -139,39 +134,33 @@ pub(super) fn limit_consecutive_blank_lines(
     let mut blank_count = 0;
     let mut problem_start_line = 0;
 
-    for (line_idx, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
+    // The trailing `None` flushes a run of blanks that reaches end of input.
+    let lines = content.lines().map(Some).chain(std::iter::once(None));
+    for (line_idx, line) in lines.enumerate() {
+        if let Some(blank) = line.filter(|l| l.trim().is_empty()) {
             blank_count += 1;
             if blank_count <= max {
-                result_lines.push(line);
+                result_lines.push(blank);
                 new_line_map.push(line_map[line_idx]);
             } else if blank_count == max + 1 {
                 problem_start_line = line_map[line_idx];
             }
-        } else {
-            if blank_count > max {
-                problems.push(Problem {
-                    line: problem_start_line,
-                    kind: ProblemKind::ExcessiveBlankLines {
-                        found: blank_count,
-                        limit: max,
-                    },
-                });
-            }
-            blank_count = 0;
+            continue;
+        }
+        if blank_count > max {
+            problems.push(Problem {
+                line: problem_start_line,
+                kind: ProblemKind::ExcessiveBlankLines {
+                    found: blank_count,
+                    limit: max,
+                },
+            });
+        }
+        blank_count = 0;
+        if let Some(line) = line {
             result_lines.push(line);
             new_line_map.push(line_map[line_idx]);
         }
-    }
-
-    if blank_count > max {
-        problems.push(Problem {
-            line: problem_start_line,
-            kind: ProblemKind::ExcessiveBlankLines {
-                found: blank_count,
-                limit: max,
-            },
-        });
     }
 
     (result_lines.join("\n"), new_line_map, problems)
@@ -218,12 +207,11 @@ pub(super) fn remove_code_block_remnants(
 pub(super) fn remove_zero_width_chars(content: &str, line_map: &[usize]) -> (String, Vec<Problem>) {
     let mut problems = vec![];
     let mut result = String::with_capacity(content.len());
-    let mut char_idx = 0;
 
     for (line_idx, line) in content.lines().enumerate() {
-        for ch in line.chars() {
+        for (col, ch) in line.chars().enumerate() {
             let is_zero_width = ZERO_WIDTH_CHARS.contains(&ch);
-            let is_bom_at_start = ch == '\u{FEFF}' && char_idx == 0;
+            let is_bom_at_start = ch == '\u{FEFF}' && line_idx == 0 && col == 0;
 
             if is_zero_width && !is_bom_at_start {
                 problems.push(Problem {
@@ -233,10 +221,8 @@ pub(super) fn remove_zero_width_chars(content: &str, line_map: &[usize]) -> (Str
             } else {
                 result.push(ch);
             }
-            char_idx += 1;
         }
         result.push('\n');
-        char_idx += 1;
     }
 
     // Remove the trailing newline we added (EOF normalization handles this)
