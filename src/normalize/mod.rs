@@ -508,6 +508,38 @@ mod tests {
             .iter()
             .find(|p| matches!(p.kind, ProblemKind::LeadingBlankLines { count: 2 }));
         assert_eq!(problem.map(|p| p.line), Some(1));
+        let again = normalize_content(&result.content, &NormalizeConfig::default());
+        assert_eq!(again.content, result.content);
+    }
+
+    #[test]
+    fn test_bom_only_and_blank_inputs_do_not_panic_and_are_idempotent() {
+        for fix_code_blocks in [false, true] {
+            for remove_leading_blanks in [true, false] {
+                let config = NormalizeConfig {
+                    fix_code_blocks,
+                    remove_leading_blanks,
+                    ..NormalizeConfig::default()
+                };
+                let mut inputs = vec![
+                    "\u{FEFF}",
+                    "\u{FEFF}\n",
+                    "\u{FEFF}\n\n",
+                    "\u{FEFF} \n",
+                    "\u{FEFF}\r\n",
+                ];
+                if fix_code_blocks {
+                    inputs.extend(["\u{FEFF}```\n", "\u{FEFF}```py\n```\n"]);
+                }
+                for input in inputs {
+                    let first = normalize_content(input, &config);
+                    assert_eq!(first.content, "\u{FEFF}\n", "input {input:?}");
+                    let second = normalize_content(&first.content, &config);
+                    assert_eq!(second.content, first.content, "input {input:?}");
+                    assert!(second.problems.is_empty(), "input {input:?}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -523,6 +555,8 @@ mod tests {
             .problems
             .iter()
             .any(|p| matches!(p.kind, ProblemKind::CodeBlockRemnant) && p.line == 1));
+        let again = normalize_content(&result.content, &config);
+        assert_eq!(again.content, result.content);
     }
 
     #[test]
