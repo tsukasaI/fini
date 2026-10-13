@@ -279,7 +279,20 @@ pub fn print_fix_result(
         OutputMode::Quiet => println!("{}", safe_path_display(path)),
         OutputMode::Diff => {
             let (orig, new) = masked_pair(original, &result.content);
-            print_diff(&safe_path_display(path), &orig, &new);
+            if orig != new {
+                print_diff(&safe_path_display(path), &orig, &new);
+            } else if !result.problems.is_empty() {
+                // No diff header to attach the problem list to (issue #104).
+                println!(
+                    "{}Detected:{} {}",
+                    ctx.colors.warning,
+                    ctx.colors.reset(),
+                    safe_path_display(path)
+                );
+            }
+            let stdout = io::stdout();
+            print_problems_to(&mut stdout.lock(), &result.problems)
+                .expect("failed to write to stdout");
         }
         OutputMode::Normal => {
             for problem in result

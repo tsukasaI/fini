@@ -2946,3 +2946,30 @@ fn test_issue_104() {
         "the raw secret value must never reach --diff output: {stdout:?}"
     );
 }
+
+// issue #171: fix-mode --diff must list detection problems like check mode
+// does, and must not print a hunkless `---`/`+++` pair when there is no diff.
+#[test]
+fn test_fix_diff_lists_detections_without_empty_diff_header() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("a.py");
+    fs::write(&file, "// TODO: x\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("TODO comment at line 1"),
+        "detection missing from --diff output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("--- ") && !stdout.contains("+++ "),
+        "hunkless diff header must be omitted: {stdout:?}"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "// TODO: x\n");
+}
