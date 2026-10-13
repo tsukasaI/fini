@@ -1,7 +1,7 @@
 use crate::colors::Colors;
 use crate::normalize::{
-    line_after_pre_trim_fixes, mask_secret_lines, NormalizeConfig, NormalizeResult, Problem,
-    ProblemKind,
+    line_after_pre_trim_fixes, mask_secret_lines, normalize_line_endings, NormalizeConfig,
+    NormalizeResult, Problem, ProblemKind,
 };
 use similar::{ChangeTag, TextDiff};
 use std::io::{self, Write};
@@ -176,18 +176,11 @@ pub fn print_change_summary_to<W: Write>(
     // whitespace bullets. Normalize line endings first so those bullets only
     // fire for a change distinct from the line-ending one reported below
     // (issue #83).
-    let original_lf = original.replace("\r\n", "\n").replace('\r', "\n");
+    let original_lf = normalize_line_endings(original);
 
-    let orig_trimmed = original_lf.trim_end_matches('\n');
-    let orig_trailing_newlines = original_lf[orig_trimmed.len()..]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count();
-    let result_trimmed = result_content.trim_end_matches('\n');
-    let result_trailing_newlines = result_content[result_trimmed.len()..]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count();
+    let orig_trailing_newlines = original_lf.len() - original_lf.trim_end_matches('\n').len();
+    let result_trailing_newlines =
+        result_content.len() - result_content.trim_end_matches('\n').len();
 
     if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
         writeln!(w, "  - missing EOF newline")?;

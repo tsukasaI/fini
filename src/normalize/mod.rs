@@ -9,11 +9,11 @@ use detect::{
 };
 use fix::{
     fix_fullwidth_spaces, limit_consecutive_blank_lines, normalize_eof_newline,
-    normalize_line_endings, remove_code_block_remnants, remove_leading_blank_lines,
-    remove_trailing_whitespace, remove_zero_width_chars,
+    remove_code_block_remnants, remove_leading_blank_lines, remove_trailing_whitespace,
+    remove_zero_width_chars,
 };
 
-pub(crate) use fix::line_after_pre_trim_fixes;
+pub(crate) use fix::{line_after_pre_trim_fixes, normalize_line_endings};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizeConfig {
