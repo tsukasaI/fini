@@ -1578,6 +1578,78 @@ fn test_stdin_normalizes_content() {
     assert_eq!(stdout, "hello\nworld\n");
 }
 
+/// Run `fini --stdin <args>` with `input`, returning the finished output.
+/// The write result is ignored: the process may exit before reading it all.
+fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let _ = stdin.write_all(input);
+    drop(stdin);
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn test_stdin_oversize_input_exits_2_without_output() {
+    let output = run_stdin(&["--max-file-size", "16"], &[b'a'; 100_000]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("too large"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_stdin_input_at_size_limit_is_processed() {
+    let output = run_stdin(&["--max-file-size", "6"], b"hello\n");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"hello\n");
+}
+
+#[test]
+fn test_stdin_utf16_bom_exits_2_without_output() {
+    for bom in [[0xFF, 0xFE], [0xFE, 0xFF]] {
+        let mut input = bom.to_vec();
+        input.extend_from_slice(b"h\0i\0\n\0");
+        let output = run_stdin(&[], &input);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("UTF-16"), "stderr: {stderr}");
+    }
+}
+
+#[test]
+fn test_stdin_nul_bytes_exit_2_without_output() {
+    let output = run_stdin(&[], b"hello\0world\n");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("binary"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_stdin_nul_bytes_exit_2_in_check_mode() {
+    let output = run_stdin(&["--check"], b"hello\0world\n");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn test_stdin_empty_input_still_succeeds() {
+    let output = run_stdin(&[], b"");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
 #[test]
 fn test_stdin_check_mode_detects_problems() {
     use std::io::Write;

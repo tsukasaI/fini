@@ -1,4 +1,4 @@
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -6,9 +6,9 @@ use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, escape_line_breaks, find_config_file, find_editorconfig,
     generate_init_file, load_config, merge_exclude_patterns, merge_normalize_config,
-    normalize_content, parse_editorconfig, print_check_report_to, run, safe_path_display,
-    should_use_colors, warn_suppressed_secrets, CliNormalizeOptions, Colors, Config, FiniToml,
-    OutputContext, OutputMode,
+    normalize_content, parse_editorconfig, print_check_report_to, read_gated, run,
+    safe_path_display, should_use_colors, warn_suppressed_secrets, CliNormalizeOptions, Colors,
+    Config, FiniToml, OutputContext, OutputMode, SkipReason,
 };
 
 /// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
@@ -234,11 +234,20 @@ fn handle_init() -> ExitCode {
 }
 
 fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
-    let mut input = String::new();
-    if let Err(e) = io::stdin().read_to_string(&mut input) {
-        eprintln!("Error reading stdin: {e}");
-        return ExitCode::from(2);
-    }
+    // Same gates as file mode (size, UTF-16 BOM, NUL, UTF-8). Empty input
+    // is not a skip here: it flows through as an empty document.
+    let input = match read_gated(io::stdin().lock(), normalize.max_file_size) {
+        Ok(Ok(input)) => input,
+        Ok(Err(SkipReason::Empty)) => String::new(),
+        Ok(Err(reason)) => {
+            eprintln!("Error: stdin skipped: {}", reason.label());
+            return ExitCode::from(2);
+        }
+        Err(e) => {
+            eprintln!("Error reading stdin: {e}");
+            return ExitCode::from(2);
+        }
+    };
 
     let result = normalize_content(&input, normalize);
 
