@@ -174,6 +174,9 @@ mod tests {
     #[test]
     fn test_find_config_prefers_closer() {
         let parent = TempDir::new().unwrap();
+        // Without a git marker the search never leaves `start_dir`, so the
+        // parent config would be unreachable and closer-first would go untested.
+        fs::create_dir(parent.path().join(".git")).unwrap();
         let parent_config = parent.path().join("fini.toml");
         fs::write(&parent_config, "[normalize]\nfix_code_blocks = false\n").unwrap();
 
