@@ -15,7 +15,7 @@
         packages = {
           fini = pkgs.rustPlatform.buildRustPackage {
             pname = "fini";
-            version = "0.5.0";
+            version = "0.7.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
