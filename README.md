@@ -157,7 +157,9 @@ API_KEY = "sk_test_example"
 | `fini:ignore-next-line` | Suppress all detections on the next line |
 | `fini:ignore-next-line secret` | Suppress only listed kinds on the next line |
 
-Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `fullwidth`, `zero-width`, `leading-blanks`, `blank-lines`, `code-block`
+Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`
+
+Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading or excess blank lines, code block remnants) are never suppressed, since the content changes regardless; unrecognized kinds are ignored.
 
 Everything on a line from `fini:ignore`/`fini:ignore-next-line` onward is
 directive syntax, not code, so it's never scanned for TODO/FIXME markers or

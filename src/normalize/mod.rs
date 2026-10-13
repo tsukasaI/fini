@@ -1287,6 +1287,24 @@ mod tests {
     }
 
     #[test]
+    fn test_ignore_does_not_suppress_fix_kinds() {
+        for input in [
+            "a\u{3000}b # fini:ignore fullwidth\n",
+            "a\u{3000}b # fini:ignore\n",
+        ] {
+            let result = normalize_content(input, &NormalizeConfig::default());
+            assert!(
+                result
+                    .problems
+                    .iter()
+                    .any(|p| p.kind == ProblemKind::FullWidthSpace && p.line == 1),
+                "{input:?}"
+            );
+            assert!(result.suppressed.is_empty());
+        }
+    }
+
+    #[test]
     fn test_ignore_inline_suppresses_todo() {
         let input = "// TODO: fix this fini:ignore\n";
         let result = normalize_content(input, &NormalizeConfig::default());

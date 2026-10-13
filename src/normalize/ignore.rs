@@ -26,6 +26,11 @@ impl IgnoreMap {
     }
 
     pub(super) fn is_ignored(&self, line: usize, kind: &ProblemKind) -> bool {
+        // Fix-type problems change the content regardless, so a directive
+        // hiding them would leave `--check` failing with no explanation (#165).
+        if !kind.is_detection_only() {
+            return false;
+        }
         match self.ignores.get(&line) {
             None => false,
             Some(None) => true,
@@ -254,6 +259,24 @@ mod tests {
         let content = "// just a comment\nfn main() {}\n";
         let map = parse_ignore_directives(content, &identity_map(content));
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn fix_kinds_never_suppressed() {
+        let kinds = [
+            ProblemKind::FullWidthSpace,
+            ProblemKind::ZeroWidthCharacter,
+            ProblemKind::CodeBlockRemnant,
+            ProblemKind::LeadingBlankLines { count: 1 },
+            ProblemKind::ExcessiveBlankLines { found: 5, limit: 2 },
+        ];
+        let content = "x fini:ignore fullwidth,zero-width,code-block,leading-blanks,blank-lines\ny fini:ignore\n";
+        let map = parse_ignore_directives(content, &identity_map(content));
+        for kind in &kinds {
+            assert!(!map.is_ignored(1, kind), "selective: {kind:?}");
+            assert!(!map.is_ignored(2, kind), "ignore-all: {kind:?}");
+        }
+        assert!(map.is_ignored(2, &ProblemKind::TodoComment));
     }
 
     #[test]
