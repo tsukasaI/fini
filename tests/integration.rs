@@ -1949,6 +1949,12 @@ fn test_stdin_check_diff_masked_away_still_prints_error_header() {
             stderr.contains("Error: stdin"),
             "Error header missing from stderr: {stderr}"
         );
+        let header_pos = stderr.find("Error: stdin");
+        let bullet_pos = stderr.find("  - ");
+        assert!(
+            header_pos.is_some() && bullet_pos.is_some() && header_pos < bullet_pos,
+            "Error header must precede the problem bullet: {stderr}"
+        );
         assert!(
             !stderr.contains("--- stdin"),
             "hunkless diff header must stay omitted: {stderr}"
@@ -3055,5 +3061,101 @@ fn test_fix_diff_lists_detections_without_empty_diff_header() {
         !stdout.contains("--- ") && !stdout.contains("+++ "),
         "hunkless diff header must be omitted: {stdout:?}"
     );
+    assert!(
+        stdout.contains("Detected: ") && stdout.contains("a.py"),
+        "Detected header missing from --diff output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("Would fix:"),
+        "an unchanged file must not be labelled Would fix: {stdout:?}"
+    );
     assert_eq!(fs::read_to_string(&file).unwrap(), "// TODO: x\n");
+}
+
+// issue #171: a real diff and the detection list must both be shown.
+#[test]
+fn test_fix_diff_shows_hunk_and_detections_together() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("a.py");
+    fs::write(&file, "x = 1  \n// TODO: x\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--- ") && stdout.contains("+++ ") && stdout.contains("-x = 1  "),
+        "diff hunk missing from --diff output: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("TODO comment at line 2"),
+        "detection missing from --diff output: {stdout:?}"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "x = 1  \n// TODO: x\n");
+}
+
+// issue #171: when masking collapses the diff, fix-mode --diff names the file
+// and still lists the problems, without leaking the secret value.
+#[test]
+fn test_fix_diff_masked_collapse_lists_problems_under_header() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("b.txt");
+    fs::write(&file, "password = \"hunter2hunter2\"  \n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let header_pos = stdout.find("Would fix:");
+    let secret_pos = stdout.find("potential secret");
+    assert!(
+        header_pos.is_some() && secret_pos.is_some() && header_pos < secret_pos,
+        "header must precede the secret hint: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("b.txt"),
+        "file name missing from --diff output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("--- ") && !stdout.contains("hunter2hunter2"),
+        "masked collapse must print no hunk and no raw value: {stdout:?}"
+    );
+}
+
+// issue #185: with secret detection off there are no problems, but the file
+// is still counted as fixed, so --diff must still name it.
+#[test]
+fn test_fix_diff_masked_collapse_without_problems_still_names_file() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("fini.toml");
+    let file = dir.path().join("b.txt");
+    fs::write(&config, "[normalize]\ndetect_secrets = false\n").unwrap();
+    fs::write(&file, "password = \"hunter2hunter2\"  \n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--config")
+        .arg(config.to_str().unwrap())
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Would fix:") && stdout.contains("b.txt"),
+        "file name missing from --diff output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("hunter2hunter2"),
+        "the raw secret value must never reach --diff output: {stdout:?}"
+    );
 }

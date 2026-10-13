@@ -266,6 +266,8 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
                     &input,
                     &result,
                     cli.diff,
+                    // Uncolored on purpose: should_use_colors checks the
+                    // stdout TTY, not stderr, where this report goes.
                     &Colors::new(false),
                     normalize.remove_zero_width,
                 );
