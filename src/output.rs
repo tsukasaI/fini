@@ -4,7 +4,6 @@ use crate::normalize::{
     ProblemKind,
 };
 use similar::{ChangeTag, TextDiff};
-use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -116,25 +115,21 @@ pub fn print_check_result(
         return;
     }
 
-    if ctx.mode == OutputMode::Diff {
-        // Mirrors print_fix_result's Diff branch: masked the same way
-        // (issue #44's contract applies to every diff path, not just fix
-        // mode). Every path here must attach a filename to the problem list
-        // below (issue #104): print the masked diff when there's a change
-        // masking doesn't collapse to identical text, otherwise an `Error:`
-        // header - `lib.rs` only reaches this function when has_changes()
-        // or the problem list is non-empty, so one of the two always fires.
+    // Mirrors print_fix_result's Diff branch: masked the same way (issue
+    // #44's contract applies to every diff path, not just fix mode). Every
+    // path must attach a filename to the problem list below (issue #104):
+    // print the masked diff when masking doesn't collapse the change to
+    // identical text, otherwise an `Error:` header - `lib.rs` only reaches
+    // this function when has_changes() or the problem list is non-empty.
+    let masked_diff = if ctx.mode == OutputMode::Diff {
         let (orig, new) = masked_pair(original, &result.content);
-        if orig != new {
-            print_diff(&safe_path_display(path), &orig, &new);
-        } else {
-            println!(
-                "{}Error:{} {}",
-                ctx.colors.error,
-                ctx.colors.reset(),
-                safe_path_display(path)
-            );
-        }
+        (orig != new).then_some((orig, new))
+    } else {
+        None
+    };
+
+    if let Some((orig, new)) = masked_diff {
+        print_diff(&safe_path_display(path), &orig, &new);
     } else {
         println!(
             "{}Error:{} {}",
@@ -143,7 +138,7 @@ pub fn print_check_result(
             safe_path_display(path)
         );
 
-        if result.has_changes() {
+        if ctx.mode != OutputMode::Diff && result.has_changes() {
             let stdout = io::stdout();
             print_change_summary_to(
                 &mut stdout.lock(),
@@ -364,11 +359,8 @@ pub fn print_skipped(path: &Path, reason: &str, ctx: &OutputContext) {
 /// Unconditional: masking is an output guarantee independent of whether
 /// secret *detection* is enabled (issue #93), so there's no caller-supplied
 /// toggle here to accidentally disable it.
-fn masked_pair<'a>(original: &'a str, content: &'a str) -> (Cow<'a, str>, Cow<'a, str>) {
-    (
-        Cow::Owned(mask_secret_lines(original)),
-        Cow::Owned(mask_secret_lines(content)),
-    )
+fn masked_pair(original: &str, content: &str) -> (String, String) {
+    (mask_secret_lines(original), mask_secret_lines(content))
 }
 
 pub fn print_diff(label: &str, original: &str, content: &str) {
