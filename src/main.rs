@@ -5,10 +5,10 @@ use std::process::ExitCode;
 use clap::Parser;
 use fini::{
     check_editorconfig_conflicts, escape_line_breaks, find_config_file, find_editorconfig,
-    generate_init_file, load_config, mask_secret_lines, merge_exclude_patterns,
-    merge_normalize_config, normalize_content, parse_editorconfig, print_change_summary_to,
-    print_diff_to, print_problems_to, run, safe_path_display, should_use_colors,
-    CliNormalizeOptions, Config, FiniToml, OutputContext, OutputMode, ProblemKind,
+    generate_init_file, load_config, merge_exclude_patterns, merge_normalize_config,
+    normalize_content, parse_editorconfig, print_check_report_to, run, safe_path_display,
+    should_use_colors, warn_suppressed_secrets, CliNormalizeOptions, Colors, Config, FiniToml,
+    OutputContext, OutputMode,
 };
 
 /// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
@@ -243,14 +243,7 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
     let result = normalize_content(&input, normalize);
 
     // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
-    for problem in &result.suppressed {
-        if let ProblemKind::SecretPattern { hint } = &problem.kind {
-            eprintln!(
-                "Warning: stdin:{} potential secret ({hint}) suppressed by fini:ignore",
-                problem.line
-            );
-        }
-    }
+    warn_suppressed_secrets("stdin", &result.suppressed);
 
     if cli.check {
         if result.has_changes() || result.has_detection_problems() {
@@ -258,40 +251,15 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
                 // Diagnostics go to stderr so stdout keeps its "normalized
                 // content only" contract (issue #38). Best-effort: a closed
                 // stderr must not mask the check failure exit code.
-                let mut stderr = io::stderr().lock();
-                if cli.diff {
-                    // Always masked, regardless of whether detect_secrets is
-                    // enabled: masking is an output guarantee independent of
-                    // the detection feature it happens to share patterns
-                    // with (issue #93).
-                    let (orig, new) = (
-                        mask_secret_lines(&input),
-                        mask_secret_lines(&result.content),
-                    );
-                    // Skip the diff header when there's nothing to show a
-                    // diff of - either no content change, or masking
-                    // collapsed the only change (a secret line) to identical
-                    // text. Stricter than file-mode's print_check_result,
-                    // which only guards on the unmasked has_changes().
-                    if orig != new {
-                        let _ = print_diff_to(&mut stderr, "stdin", &orig, &new);
-                    }
-                } else {
-                    // Unconditional header (mirrors file-mode's "Error: <path>"
-                    // in print_check_result) so stderr is never empty on
-                    // exit 1, even for a fix-only transform whose bullet
-                    // print_change_summary_to doesn't cover.
-                    let _ = writeln!(stderr, "Error: stdin");
-                    if result.has_changes() {
-                        let _ = print_change_summary_to(
-                            &mut stderr,
-                            &input,
-                            &result.content,
-                            normalize.remove_zero_width,
-                        );
-                    }
-                }
-                let _ = print_problems_to(&mut stderr, &result.problems);
+                let _ = print_check_report_to(
+                    &mut io::stderr().lock(),
+                    "stdin",
+                    &input,
+                    &result,
+                    cli.diff,
+                    &Colors::new(false),
+                    normalize.remove_zero_width,
+                );
             }
             return ExitCode::from(1);
         }

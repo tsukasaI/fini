@@ -12,7 +12,7 @@ const ZERO_WIDTH_CHARS: &[char] = &[
     '\u{FEFF}', // Byte Order Mark (BOM) - removed except at file start
 ];
 
-pub(super) fn normalize_line_endings(content: &str) -> String {
+pub(crate) fn normalize_line_endings(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 

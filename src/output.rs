@@ -1,10 +1,9 @@
 use crate::colors::Colors;
 use crate::normalize::{
-    line_after_pre_trim_fixes, mask_secret_lines, NormalizeConfig, NormalizeResult, Problem,
-    ProblemKind,
+    line_after_pre_trim_fixes, mask_secret_lines, normalize_line_endings, NormalizeConfig,
+    NormalizeResult, Problem, ProblemKind,
 };
 use similar::{ChangeTag, TextDiff};
-use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -116,48 +115,57 @@ pub fn print_check_result(
         return;
     }
 
-    if ctx.mode == OutputMode::Diff {
-        // Mirrors print_fix_result's Diff branch: masked the same way
-        // (issue #44's contract applies to every diff path, not just fix
-        // mode). Every path here must attach a filename to the problem list
-        // below (issue #104): print the masked diff when there's a change
-        // masking doesn't collapse to identical text, otherwise an `Error:`
-        // header - `lib.rs` only reaches this function when has_changes()
-        // or the problem list is non-empty, so one of the two always fires.
-        let (orig, new) = masked_pair(original, &result.content);
-        if orig != new {
-            print_diff(&safe_path_display(path), &orig, &new);
-        } else {
-            println!(
-                "{}Error:{} {}",
-                ctx.colors.error,
-                ctx.colors.reset(),
-                safe_path_display(path)
-            );
-        }
-    } else {
-        println!(
-            "{}Error:{} {}",
-            ctx.colors.error,
-            ctx.colors.reset(),
-            safe_path_display(path)
-        );
+    let stdout = io::stdout();
+    // Panicking on a failed stdout write matches println!'s historical behavior
+    print_check_report_to(
+        &mut stdout.lock(),
+        &safe_path_display(path),
+        original,
+        result,
+        ctx.mode == OutputMode::Diff,
+        &ctx.colors,
+        remove_zero_width,
+    )
+    .expect("failed to write to stdout");
+}
 
-        if result.has_changes() {
-            let stdout = io::stdout();
-            print_change_summary_to(
-                &mut stdout.lock(),
-                original,
-                &result.content,
-                remove_zero_width,
-            )
-            .expect("failed to write to stdout");
+/// Writes one input's check-mode report: the masked diff or an
+/// `Error: <label>` header, then the problem list. Shared by file mode
+/// (stdout) and `--stdin --check` (stderr). `label` must already be safe to
+/// print as a line (see `safe_path_display`).
+pub fn print_check_report_to<W: Write>(
+    w: &mut W,
+    label: &str,
+    original: &str,
+    result: &NormalizeResult,
+    show_diff: bool,
+    colors: &Colors,
+    remove_zero_width: bool,
+) -> io::Result<()> {
+    // Mirrors print_fix_result's Diff branch: masked the same way (issue
+    // #44's contract applies to every diff path, not just fix mode). Every
+    // path must attach a label to the problem list below (issue #104):
+    // print the masked diff when masking doesn't collapse the change to
+    // identical text, otherwise an `Error:` header - callers only reach this
+    // when has_changes() or the problem list is non-empty.
+    let masked_diff = if show_diff {
+        let (orig, new) = masked_pair(original, &result.content);
+        (orig != new).then_some((orig, new))
+    } else {
+        None
+    };
+
+    if let Some((orig, new)) = masked_diff {
+        print_diff_to(w, label, &orig, &new)?;
+    } else {
+        writeln!(w, "{}Error:{} {}", colors.error, colors.reset(), label)?;
+
+        if !show_diff && result.has_changes() {
+            print_change_summary_to(w, original, &result.content, remove_zero_width)?;
         }
     }
 
-    let stdout = io::stdout();
-    // Panicking on a failed stdout write matches println!'s historical behavior
-    print_problems_to(&mut stdout.lock(), &result.problems).expect("failed to write to stdout");
+    print_problems_to(w, &result.problems)
 }
 
 /// Prints the content-diff-derived summary lines (line endings, missing EOF
@@ -181,18 +189,11 @@ pub fn print_change_summary_to<W: Write>(
     // whitespace bullets. Normalize line endings first so those bullets only
     // fire for a change distinct from the line-ending one reported below
     // (issue #83).
-    let original_lf = original.replace("\r\n", "\n").replace('\r', "\n");
+    let original_lf = normalize_line_endings(original);
 
-    let orig_trimmed = original_lf.trim_end_matches('\n');
-    let orig_trailing_newlines = original_lf[orig_trimmed.len()..]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count();
-    let result_trimmed = result_content.trim_end_matches('\n');
-    let result_trailing_newlines = result_content[result_trimmed.len()..]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count();
+    let orig_trailing_newlines = original_lf.len() - original_lf.trim_end_matches('\n').len();
+    let result_trailing_newlines =
+        result_content.len() - result_content.trim_end_matches('\n').len();
 
     if orig_trailing_newlines == 0 && result_trailing_newlines > 0 {
         writeln!(w, "  - missing EOF newline")?;
@@ -278,7 +279,20 @@ pub fn print_fix_result(
         OutputMode::Quiet => println!("{}", safe_path_display(path)),
         OutputMode::Diff => {
             let (orig, new) = masked_pair(original, &result.content);
-            print_diff(&safe_path_display(path), &orig, &new);
+            if orig != new {
+                print_diff(&safe_path_display(path), &orig, &new);
+            } else if !result.problems.is_empty() {
+                // No diff header to attach the problem list to (issue #104).
+                println!(
+                    "{}Detected:{} {}",
+                    ctx.colors.warning,
+                    ctx.colors.reset(),
+                    safe_path_display(path)
+                );
+            }
+            let stdout = io::stdout();
+            print_problems_to(&mut stdout.lock(), &result.problems)
+                .expect("failed to write to stdout");
         }
         OutputMode::Normal => {
             for problem in result
@@ -334,6 +348,23 @@ pub fn print_fix_result(
     }
 }
 
+/// Leaves an stderr audit trail for each secret detection suppressed by
+/// `fini:ignore`, and returns how many there were. `label` must already be
+/// safe to print as a line (see `safe_path_display`).
+pub fn warn_suppressed_secrets(label: &str, suppressed: &[Problem]) -> usize {
+    let mut count = 0;
+    for problem in suppressed {
+        if let ProblemKind::SecretPattern { hint } = &problem.kind {
+            count += 1;
+            eprintln!(
+                "Warning: {}:{} potential secret ({hint}) suppressed by fini:ignore",
+                label, problem.line
+            );
+        }
+    }
+    count
+}
+
 pub fn print_checked(path: &Path, ctx: &OutputContext) {
     if ctx.mode == OutputMode::Quiet {
         return;
@@ -364,11 +395,8 @@ pub fn print_skipped(path: &Path, reason: &str, ctx: &OutputContext) {
 /// Unconditional: masking is an output guarantee independent of whether
 /// secret *detection* is enabled (issue #93), so there's no caller-supplied
 /// toggle here to accidentally disable it.
-fn masked_pair<'a>(original: &'a str, content: &'a str) -> (Cow<'a, str>, Cow<'a, str>) {
-    (
-        Cow::Owned(mask_secret_lines(original)),
-        Cow::Owned(mask_secret_lines(content)),
-    )
+fn masked_pair(original: &str, content: &str) -> (String, String) {
+    (mask_secret_lines(original), mask_secret_lines(content))
 }
 
 pub fn print_diff(label: &str, original: &str, content: &str) {

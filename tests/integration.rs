@@ -1840,6 +1840,54 @@ fn test_stdin_check_diff_masked_to_no_diff_omits_diff_header() {
     );
 }
 
+// issue #166: when masking collapses the whole diff, stdin must still print
+// an `Error: stdin` header (as file mode does) so no problem bullet is ever
+// printed bare.
+#[test]
+fn test_stdin_check_diff_masked_away_still_prints_error_header() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    // Trailing whitespace, and a CRLF change, and a U+3000 on a secret line:
+    // each leaves masked before/after identical.
+    for input in [
+        &b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"  \n"[..],
+        &b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"\r\n"[..],
+        "aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"\u{3000}\n".as_bytes(),
+    ] {
+        let mut child = fini_cmd()
+            .arg("--stdin")
+            .arg("--check")
+            .arg("--diff")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        child.stdin.take().unwrap().write_all(input).unwrap();
+
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "stdout must stay clean: {stdout}");
+        assert!(
+            stderr.contains("Error: stdin"),
+            "Error header missing from stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("--- stdin"),
+            "hunkless diff header must stay omitted: {stderr}"
+        );
+        assert!(
+            !stderr.contains("AKIAABCDEFGHIJKLMNOP"),
+            "secret value must never reach stderr: {stderr}"
+        );
+    }
+}
+
 // issue #78: fix mode (without --check) must not print "Fixed:" for a file
 // that had no auto-fixable changes but does have detection-only problems
 // (TODO/FIXME/debug/secret) — and must show those problems, not silently
@@ -2897,4 +2945,31 @@ fn test_issue_104() {
         !stdout.contains("hunter2hunter2"),
         "the raw secret value must never reach --diff output: {stdout:?}"
     );
+}
+
+// issue #171: fix-mode --diff must list detection problems like check mode
+// does, and must not print a hunkless `---`/`+++` pair when there is no diff.
+#[test]
+fn test_fix_diff_lists_detections_without_empty_diff_header() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("a.py");
+    fs::write(&file, "// TODO: x\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("TODO comment at line 1"),
+        "detection missing from --diff output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("--- ") && !stdout.contains("+++ "),
+        "hunkless diff header must be omitted: {stdout:?}"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "// TODO: x\n");
 }
