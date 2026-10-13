@@ -2946,10 +2946,22 @@ fn test_issue_103() {
         stdout.contains("too large"),
         "the oversized file must be reported as skipped: {stdout:?}"
     );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("Skipping") && l.contains("big.txt")),
+        "big.txt must be named in a skip line: {stdout:?}"
+    );
     assert_eq!(fs::read_to_string(&big).unwrap(), "x".repeat(2000));
 
-    // The small file, under the limit, is still checked normally.
-    assert!(fs::read_to_string(&small).unwrap() == "hello\n");
+    // The small file, under the limit, must not be reported as skipped.
+    assert!(
+        !stdout
+            .lines()
+            .any(|l| l.contains("Skipping") && l.contains("small.txt")),
+        "small.txt is under the limit and must not be skipped: {stdout:?}"
+    );
+    assert_eq!(fs::read_to_string(&small).unwrap(), "hello\n");
 }
 
 // issue #103: raising --max-file-size lets a file that would otherwise be

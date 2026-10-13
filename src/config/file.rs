@@ -56,7 +56,7 @@ pub fn find_file_upward(
     filename: &str,
     stop_at_git_root: bool,
 ) -> Option<PathBuf> {
-    if stop_at_git_root && !has_git_ancestor(start_dir) {
+    if stop_at_git_root && !has_git_marker(start_dir) {
         let file_path = start_dir.join(filename);
         return file_path.exists().then_some(file_path);
     }
@@ -79,7 +79,10 @@ pub fn find_file_upward(
     }
 }
 
-fn has_git_ancestor(start_dir: &Path) -> bool {
+// Any `.git` entry counts, even an empty directory: the walk above stops at
+// the same marker, so this must agree with it. Not unified with
+// walker::has_real_git_repo, which requires HEAD and canonicalizes.
+fn has_git_marker(start_dir: &Path) -> bool {
     let mut current = start_dir.to_path_buf();
     loop {
         if current.join(".git").exists() {
@@ -156,7 +159,7 @@ mod tests {
     fn test_issue_86() {
         let grandparent = TempDir::new().unwrap();
         assert!(
-            !has_git_ancestor(grandparent.path()),
+            !has_git_marker(grandparent.path()),
             "TMPDIR is inside a git repo; this test cannot run here"
         );
         let unrelated_config = grandparent.path().join("fini.toml");
@@ -174,6 +177,9 @@ mod tests {
     #[test]
     fn test_find_config_prefers_closer() {
         let parent = TempDir::new().unwrap();
+        // Without a git marker the search never leaves `start_dir`, so the
+        // parent config would be unreachable and closer-first would go untested.
+        fs::create_dir(parent.path().join(".git")).unwrap();
         let parent_config = parent.path().join("fini.toml");
         fs::write(&parent_config, "[normalize]\nfix_code_blocks = false\n").unwrap();
 
