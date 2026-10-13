@@ -348,6 +348,23 @@ pub fn print_fix_result(
     }
 }
 
+/// Leaves an stderr audit trail for each secret detection suppressed by
+/// `fini:ignore`, and returns how many there were. `label` must already be
+/// safe to print as a line (see `safe_path_display`).
+pub fn warn_suppressed_secrets(label: &str, suppressed: &[Problem]) -> usize {
+    let mut count = 0;
+    for problem in suppressed {
+        if let ProblemKind::SecretPattern { hint } = &problem.kind {
+            count += 1;
+            eprintln!(
+                "Warning: {}:{} potential secret ({hint}) suppressed by fini:ignore",
+                label, problem.line
+            );
+        }
+    }
+    count
+}
+
 pub fn print_checked(path: &Path, ctx: &OutputContext) {
     if ctx.mode == OutputMode::Quiet {
         return;

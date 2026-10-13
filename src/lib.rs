@@ -16,7 +16,8 @@ pub use normalize::{
 };
 pub use output::{
     escape_line_breaks, print_change_summary_to, print_check_report_to, print_diff, print_diff_to,
-    print_problems_to, safe_path_display, Config, OutputContext, OutputMode, RunResult,
+    print_problems_to, safe_path_display, warn_suppressed_secrets, Config, OutputContext,
+    OutputMode, RunResult,
 };
 pub use progress::ProgressReporter;
 pub use walker::walk_paths;
@@ -310,16 +311,8 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
 /// not just trusted (issue #46).
 fn record_suppressed(path: &Path, suppressed: &[Problem], result: &mut RunResult) {
     result.suppressed += suppressed.len();
-    for problem in suppressed {
-        if let ProblemKind::SecretPattern { hint } = &problem.kind {
-            result.suppressed_secrets += 1;
-            eprintln!(
-                "Warning: {}:{} potential secret ({hint}) suppressed by fini:ignore",
-                output::safe_path_display(path),
-                problem.line
-            );
-        }
-    }
+    result.suppressed_secrets +=
+        output::warn_suppressed_secrets(&output::safe_path_display(path), suppressed);
 }
 
 /// Atomically replace `path` with `content`: write to a temp file in the same
