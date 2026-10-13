@@ -49,7 +49,7 @@ pub fn is_binary(content: &[u8]) -> bool {
 
 /// Why a file was not normalized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SkipReason {
+pub enum SkipReason {
     Empty,
     Symlink,
     TooLarge,
@@ -59,7 +59,7 @@ enum SkipReason {
 }
 
 impl SkipReason {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Empty => "empty",
             Self::Symlink => "symlink",
@@ -72,7 +72,7 @@ impl SkipReason {
 
     /// Empty files are trivially "done"; every other skip means "this file
     /// was not inspected".
-    fn counts_as_skipped(self) -> bool {
+    pub fn counts_as_skipped(self) -> bool {
         !matches!(self, Self::Empty)
     }
 }
@@ -237,6 +237,58 @@ fn apply_outcome(
     }
 }
 
+/// Read `reader` as UTF-8 text, applying the gates shared by file and stdin
+/// input: empty, UTF-16 BOM, binary (NUL), `max_file_size`, non-UTF-8.
+///
+/// Reads at most `max_file_size + 1` bytes, so an oversize or unbounded
+/// source is never buffered past the limit. The outer `Err` is an I/O
+/// failure; the inner `Err` is a skip decision.
+pub fn read_gated(
+    mut reader: impl Read,
+    max_file_size: u64,
+) -> io::Result<Result<String, SkipReason>> {
+    // Classify from the first 8 KiB before reading the rest, so huge binaries
+    // are never fully buffered just to be skipped (issue #39). Capped at the
+    // limit + 1 as well so a tiny limit is not overshot by the prefix read.
+    let prefix_len = (BINARY_CHECK_SIZE as u64).min(max_file_size.saturating_add(1));
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut reader)
+        .take(prefix_len)
+        .read_to_end(&mut bytes)?;
+
+    if bytes.is_empty() {
+        return Ok(Err(SkipReason::Empty));
+    }
+
+    // A UTF-16 BOM means text in an encoding fini doesn't process; report the
+    // skip reason accurately instead of lumping it in with "binary" (issue #40)
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        return Ok(Err(SkipReason::Utf16));
+    }
+
+    if is_binary(&bytes) {
+        return Ok(Err(SkipReason::Binary));
+    }
+
+    // Bound this read too: for files the size gate only checked the length at
+    // stat time, and a file can grow between that stat and this read (an
+    // actively appended log, or a hostile repo); stdin has no length at all.
+    // A security control must hold on every path, not just the common one.
+    // +1 so input of exactly the limit still isn't flagged, but anything
+    // beyond it is.
+    let remaining_allowed = max_file_size
+        .saturating_add(1)
+        .saturating_sub(bytes.len() as u64);
+    Read::by_ref(&mut reader)
+        .take(remaining_allowed)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_file_size {
+        return Ok(Err(SkipReason::TooLarge));
+    }
+
+    Ok(String::from_utf8(bytes).map_err(|_| SkipReason::NonUtf8))
+}
+
 /// Process a single file: read, validate, normalize. Pure computation, no output.
 fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome {
     // Refuse symlinks outright: reading through one and writing back would
@@ -270,64 +322,10 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
         };
     }
 
-    // Classify from the first 8 KiB before reading the rest, so huge binaries
-    // are never fully buffered just to be skipped (issue #39)
-    let mut bytes = Vec::with_capacity(len.min(BINARY_CHECK_SIZE as u64) as usize);
-    if let Err(e) = Read::by_ref(&mut file)
-        .take(BINARY_CHECK_SIZE as u64)
-        .read_to_end(&mut bytes)
-    {
-        return FileOutcome::Error(e);
-    }
-
-    if bytes.is_empty() {
-        return FileOutcome::Skipped {
-            reason: SkipReason::Empty,
-        };
-    }
-
-    // A UTF-16 BOM means text in an encoding fini doesn't process; report the
-    // skip reason accurately instead of lumping it in with "binary" (issue #40)
-    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
-        return FileOutcome::Skipped {
-            reason: SkipReason::Utf16,
-        };
-    }
-
-    if is_binary(&bytes) {
-        return FileOutcome::Skipped {
-            reason: SkipReason::Binary,
-        };
-    }
-
-    // Bound this read too: the size gate above only checked the length at
-    // stat time, and a file can grow between that stat and this read (an
-    // actively appended log, or a hostile repo) - a security control must
-    // hold on every path, not just the common one. +1 so a file that grew
-    // to exactly the limit still isn't flagged, but anything beyond it is.
-    let remaining_allowed = normalize_config
-        .max_file_size
-        .saturating_add(1)
-        .saturating_sub(bytes.len() as u64);
-    if let Err(e) = Read::by_ref(&mut file)
-        .take(remaining_allowed)
-        .read_to_end(&mut bytes)
-    {
-        return FileOutcome::Error(e);
-    }
-    if bytes.len() as u64 > normalize_config.max_file_size {
-        return FileOutcome::Skipped {
-            reason: SkipReason::TooLarge,
-        };
-    }
-
-    let content = match String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => {
-            return FileOutcome::Skipped {
-                reason: SkipReason::NonUtf8,
-            }
-        }
+    let content = match read_gated(&mut file, normalize_config.max_file_size) {
+        Ok(Ok(content)) => content,
+        Ok(Err(reason)) => return FileOutcome::Skipped { reason },
+        Err(e) => return FileOutcome::Error(e),
     };
 
     let normalize_result = normalize_content(&content, normalize_config);

@@ -213,6 +213,11 @@ your repo).
 Skipped binary / non-UTF-8 / symlink files are counted in the run summary;
 use `--verbose` to list them individually with the skip reason.
 
+`--stdin` applies the same size, UTF-16, binary and non-UTF-8 gates to its
+input, honoring `--max-file-size` (and `max_file_size` in `fini.toml`). Since
+there is no file to skip, such input exits 2 with the reason on stderr and
+nothing on stdout. Empty input is still accepted.
+
 ## Claude Code Integration
 
 Add to `.claude/settings.json`:
