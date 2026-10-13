@@ -1104,6 +1104,80 @@ fn test_diff_masks_secret_lines() {
 }
 
 #[test]
+fn test_diff_masks_secret_split_by_zero_width_in_file_mode() {
+    // issue #156: a zero-width char inside the value must not leave the line unmasked.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.env");
+    fs::write(
+        &file,
+        "password = \"hunter\u{200B}2hunter2\"\ncode here   \n",
+    )
+    .unwrap();
+
+    for keep in [false, true] {
+        let mut cmd = fini_cmd();
+        cmd.arg("--diff");
+        if keep {
+            cmd.arg("--keep-zero-width");
+        }
+        let output = cmd.arg(file.to_str().unwrap()).output().unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for text in [&stdout, &stderr] {
+            assert!(
+                !text.contains("hunter2hunter2") && !text.contains("hunter\u{200B}2hunter2"),
+                "raw secret leaked (keep_zero_width={keep}): {text}"
+            );
+        }
+        assert!(
+            stdout.contains("[line masked: potential hardcoded secret]"),
+            "masked placeholder missing (keep_zero_width={keep}): {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_stdin_check_diff_masks_secret_split_by_zero_width() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    for keep in [false, true] {
+        let mut cmd = fini_cmd();
+        cmd.arg("--stdin").arg("--check").arg("--diff");
+        if keep {
+            cmd.arg("--keep-zero-width");
+        }
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all("password = \"hunter\u{200B}2hunter2\"\nhello   \n".as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for text in [&stdout, &stderr] {
+            assert!(
+                !text.contains("hunter2hunter2") && !text.contains("hunter\u{200B}2hunter2"),
+                "raw secret leaked (keep_zero_width={keep}): {text}"
+            );
+        }
+        assert!(
+            stderr.contains("[line masked: potential hardcoded secret]"),
+            "masked placeholder missing (keep_zero_width={keep}): {stderr}"
+        );
+    }
+}
+
+#[test]
 fn test_check_diff_shows_detection_only_problems() {
     // Regression test: a file whose only problems are detection-only
     // (secret pattern here; same applies to TODO/FIXME/debug/long-line)
