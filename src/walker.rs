@@ -351,6 +351,75 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn strip_git_env(cmd: &mut Command) {
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+            "GIT_PREFIX",
+        ] {
+            cmd.env_remove(var);
+        }
+        for (var, _) in std::env::vars_os() {
+            if var.to_string_lossy().starts_with("GIT_") {
+                cmd.env_remove(var);
+            }
+        }
+    }
+
+    fn git_command() -> Command {
+        let mut cmd = Command::new("git");
+        strip_git_env(&mut cmd);
+        cmd
+    }
+
+    fn git_init(dir: &Path) {
+        assert!(git_command()
+            .args(["init", "-q"])
+            .arg(dir)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    fn git_in<const N: usize>(dir: &Path, args: [&str; N]) {
+        assert!(git_command()
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[test]
+    fn test_issue_164_git_helper_strips_inherited_git_env() {
+        let mut cmd = Command::new("git");
+        cmd.env("GIT_DIR", "/nonexistent/fini-bogus")
+            .env("GIT_INDEX_FILE", "/nonexistent/fini-bogus-index");
+        strip_git_env(&mut cmd);
+        for var in ["GIT_DIR", "GIT_INDEX_FILE"] {
+            let entry = cmd.get_envs().find(|(k, _)| *k == var).unwrap();
+            assert_eq!(entry.1, None, "{var} must be removed, not passed through");
+        }
+
+        let dir = TempDir::new().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("a.txt"), "x\n").unwrap();
+        git_in(dir.path(), ["add", "a.txt"]);
+        let out = git_command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["ls-files"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
+    }
+
     #[test]
     fn test_dedup_key_falls_back_to_literal_path_when_parent_missing() {
         let mut cache = HashMap::new();
@@ -493,23 +562,11 @@ mod tests {
         // git_global(true) consult the machine's actual global gitignore,
         // which commonly lists .env.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
 
         let tracked = dir.path().join(".fini_test_hidden_tracked");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", ".fini_test_hidden_tracked"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", ".fini_test_hidden_tracked"]);
         fs::write(dir.path().join(".gitignore"), ".fini_test_hidden_tracked\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -842,23 +899,11 @@ mod tests {
         // it, not silently drop it (and any secret it contains) from
         // scanning.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
 
         let tracked = dir.path().join("tracked.env");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", "tracked.env"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", "tracked.env"]);
 
         // Now ignore it — git keeps tracking it regardless.
         fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
@@ -880,13 +925,7 @@ mod tests {
         // A file that was never tracked and matches .gitignore must remain
         // excluded — the fix only rescues already-tracked files.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
         fs::write(dir.path().join("ignored.txt"), "never tracked").unwrap();
 
@@ -907,22 +946,10 @@ mod tests {
         // an incidental .gitignore match, so they must still suppress an
         // already-tracked file.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         let tracked = dir.path().join("tracked.env");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", "tracked.env"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", "tracked.env"]);
         fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -941,23 +968,11 @@ mod tests {
         // tracked file under that directory, not just a tracked file whose
         // own path happens to match the pattern.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         fs::create_dir(dir.path().join("vendor")).unwrap();
         let tracked = dir.path().join("vendor/lib.rs");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", "vendor/lib.rs"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", "vendor/lib.rs"]);
         fs::write(dir.path().join(".gitignore"), "vendor/\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -981,25 +996,13 @@ mod tests {
         // are skipped) — the gitignore rescue must not override that
         // unrelated rule.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         let tracked = dir.path().join(".env");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
         // -f: the user's global gitignore commonly excludes .env, which
         // would otherwise make `git add` refuse it here regardless of this
         // repo's own (not-yet-written) .gitignore.
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", ".env"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", ".env"]);
         fs::write(dir.path().join(".gitignore"), ".env\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -1021,24 +1024,12 @@ mod tests {
         // gitignore rescue must use symlink_metadata, not metadata, or it
         // would stat through a tracked symlink to content outside the tree.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         let target = dir.path().join("outside_target.txt");
         fs::write(&target, "hello").unwrap();
         let link = dir.path().join("link.txt");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "link.txt"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "link.txt"]);
         fs::write(dir.path().join(".gitignore"), "link.txt\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -1066,13 +1057,7 @@ mod tests {
         fs::write(outside_target.join("tracked.txt"), "hello").unwrap();
 
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         // Track "sub/tracked.txt" as a real directory first, so the git
         // index still references that path once "sub" is replaced with a
         // symlink below — this is how a tracked path ends up "inside" what
@@ -1080,13 +1065,7 @@ mod tests {
         let sub = dir.path().join("sub");
         fs::create_dir(&sub).unwrap();
         fs::write(sub.join("tracked.txt"), "hello").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "sub/tracked.txt"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "sub/tracked.txt"]);
         fs::remove_dir_all(&sub).unwrap();
         std::os::unix::fs::symlink(&outside_target, &sub).unwrap();
         fs::write(dir.path().join(".gitignore"), "sub/\n").unwrap();
