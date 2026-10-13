@@ -256,7 +256,7 @@ fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
     let output = match output {
         Ok(o) => o,
         Err(e) => {
-            if has_git_ancestor(root) {
+            if has_real_git_repo(root) {
                 eprintln!(
                     "Warning: could not run git ({e}); tracked-but-gitignored files under {} were not rescanned",
                     crate::output::safe_path_display(root)
@@ -266,7 +266,7 @@ fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
         }
     };
     if !output.status.success() {
-        if has_git_ancestor(root) {
+        if has_real_git_repo(root) {
             eprintln!(
                 "Warning: `git ls-files` failed in {}: {} (tracked-but-gitignored files there were not rescanned)",
                 crate::output::safe_path_display(root),
@@ -296,7 +296,11 @@ fn is_plain_relative_path(rel: &Path) -> bool {
 /// worktree/submodule uses) in `root` or any ancestor — used to decide
 /// whether a git failure deserves a warning, without depending on git
 /// itself being available to answer that question.
-fn has_git_ancestor(root: &Path) -> bool {
+///
+/// Not unified with config::file::has_git_marker, which accepts a bare
+/// `.git` entry because config discovery stops at that marker; here an
+/// empty `.git` must not trigger a warning.
+fn has_real_git_repo(root: &Path) -> bool {
     let Ok(root) = root.canonicalize() else {
         return false;
     };
