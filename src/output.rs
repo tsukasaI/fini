@@ -115,13 +115,40 @@ pub fn print_check_result(
         return;
     }
 
+    let stdout = io::stdout();
+    // Panicking on a failed stdout write matches println!'s historical behavior
+    print_check_report_to(
+        &mut stdout.lock(),
+        &safe_path_display(path),
+        original,
+        result,
+        ctx.mode == OutputMode::Diff,
+        &ctx.colors,
+        remove_zero_width,
+    )
+    .expect("failed to write to stdout");
+}
+
+/// Writes one input's check-mode report: the masked diff or an
+/// `Error: <label>` header, then the problem list. Shared by file mode
+/// (stdout) and `--stdin --check` (stderr). `label` must already be safe to
+/// print as a line (see `safe_path_display`).
+pub fn print_check_report_to<W: Write>(
+    w: &mut W,
+    label: &str,
+    original: &str,
+    result: &NormalizeResult,
+    show_diff: bool,
+    colors: &Colors,
+    remove_zero_width: bool,
+) -> io::Result<()> {
     // Mirrors print_fix_result's Diff branch: masked the same way (issue
     // #44's contract applies to every diff path, not just fix mode). Every
-    // path must attach a filename to the problem list below (issue #104):
+    // path must attach a label to the problem list below (issue #104):
     // print the masked diff when masking doesn't collapse the change to
-    // identical text, otherwise an `Error:` header - `lib.rs` only reaches
-    // this function when has_changes() or the problem list is non-empty.
-    let masked_diff = if ctx.mode == OutputMode::Diff {
+    // identical text, otherwise an `Error:` header - callers only reach this
+    // when has_changes() or the problem list is non-empty.
+    let masked_diff = if show_diff {
         let (orig, new) = masked_pair(original, &result.content);
         (orig != new).then_some((orig, new))
     } else {
@@ -129,30 +156,16 @@ pub fn print_check_result(
     };
 
     if let Some((orig, new)) = masked_diff {
-        print_diff(&safe_path_display(path), &orig, &new);
+        print_diff_to(w, label, &orig, &new)?;
     } else {
-        println!(
-            "{}Error:{} {}",
-            ctx.colors.error,
-            ctx.colors.reset(),
-            safe_path_display(path)
-        );
+        writeln!(w, "{}Error:{} {}", colors.error, colors.reset(), label)?;
 
-        if ctx.mode != OutputMode::Diff && result.has_changes() {
-            let stdout = io::stdout();
-            print_change_summary_to(
-                &mut stdout.lock(),
-                original,
-                &result.content,
-                remove_zero_width,
-            )
-            .expect("failed to write to stdout");
+        if !show_diff && result.has_changes() {
+            print_change_summary_to(w, original, &result.content, remove_zero_width)?;
         }
     }
 
-    let stdout = io::stdout();
-    // Panicking on a failed stdout write matches println!'s historical behavior
-    print_problems_to(&mut stdout.lock(), &result.problems).expect("failed to write to stdout");
+    print_problems_to(w, &result.problems)
 }
 
 /// Prints the content-diff-derived summary lines (line endings, missing EOF
