@@ -486,6 +486,80 @@ mod tests {
     }
 
     #[test]
+    fn test_whitespace_only_normalizes_in_one_pass_when_keeping_leading_blanks() {
+        let config = NormalizeConfig {
+            remove_leading_blanks: false,
+            ..NormalizeConfig::default()
+        };
+        for input in ["\n \n", "\r\r", "\n\n\n"] {
+            let once = normalize_content(input, &config).content;
+            assert_eq!(once, "", "input {input:?}");
+            assert_eq!(normalize_content(&once, &config).content, once);
+        }
+    }
+
+    #[test]
+    fn test_bom_does_not_block_leading_blank_removal() {
+        let input = "\u{FEFF}\n\nfoo\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.content, "\u{FEFF}foo\n");
+        let problem = result
+            .problems
+            .iter()
+            .find(|p| matches!(p.kind, ProblemKind::LeadingBlankLines { count: 2 }));
+        assert_eq!(problem.map(|p| p.line), Some(1));
+        let again = normalize_content(&result.content, &NormalizeConfig::default());
+        assert_eq!(again.content, result.content);
+    }
+
+    #[test]
+    fn test_bom_only_and_blank_inputs_do_not_panic_and_are_idempotent() {
+        for fix_code_blocks in [false, true] {
+            for remove_leading_blanks in [true, false] {
+                let config = NormalizeConfig {
+                    fix_code_blocks,
+                    remove_leading_blanks,
+                    ..NormalizeConfig::default()
+                };
+                let mut inputs = vec![
+                    "\u{FEFF}",
+                    "\u{FEFF}\n",
+                    "\u{FEFF}\n\n",
+                    "\u{FEFF} \n",
+                    "\u{FEFF}\r\n",
+                ];
+                if fix_code_blocks {
+                    inputs.extend(["\u{FEFF}```\n", "\u{FEFF}```py\n```\n"]);
+                }
+                for input in inputs {
+                    let first = normalize_content(input, &config);
+                    assert_eq!(first.content, "\u{FEFF}\n", "input {input:?}");
+                    let second = normalize_content(&first.content, &config);
+                    assert_eq!(second.content, first.content, "input {input:?}");
+                    assert!(second.problems.is_empty(), "input {input:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bom_does_not_block_first_line_fence_removal() {
+        let config = NormalizeConfig {
+            fix_code_blocks: true,
+            ..NormalizeConfig::default()
+        };
+        let input = "\u{FEFF}```py\nx\n```\n";
+        let result = normalize_content(input, &config);
+        assert_eq!(result.content, "\u{FEFF}x\n");
+        assert!(result
+            .problems
+            .iter()
+            .any(|p| matches!(p.kind, ProblemKind::CodeBlockRemnant) && p.line == 1));
+        let again = normalize_content(&result.content, &config);
+        assert_eq!(again.content, result.content);
+    }
+
+    #[test]
     fn test_remove_zwsp() {
         let input = "hello\u{200B}world\n";
         let result = normalize_content(input, &NormalizeConfig::default());

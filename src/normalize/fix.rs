@@ -69,11 +69,34 @@ pub(crate) fn line_after_pre_trim_fixes(line: &str, remove_zero_width: bool) -> 
     without_zero_width.replace(FULLWIDTH_SPACE, " ")
 }
 
+// Callers must re-attach the BOM via `reattach_bom`.
+fn split_bom(content: &str) -> (&str, &str) {
+    content.split_at(if content.starts_with('\u{FEFF}') {
+        '\u{FEFF}'.len_utf8()
+    } else {
+        0
+    })
+}
+
+// A bare BOM still occupies a line of the output, so keep the map entry of
+// the original first line when every body line was dropped.
+fn reattach_bom(
+    bom: &str,
+    kept_lines: &[&str],
+    mut kept_map: Vec<usize>,
+    line_map: &[usize],
+) -> (String, Vec<usize>) {
+    if !bom.is_empty() && kept_map.is_empty() {
+        kept_map.push(line_map[0]);
+    }
+    (format!("{bom}{}", kept_lines.join("\n")), kept_map)
+}
+
 pub(super) fn normalize_eof_newline(content: &str) -> String {
-    if content.is_empty() {
+    let trimmed = content.trim_end_matches('\n');
+    if trimmed.is_empty() {
         return String::new();
     }
-    let trimmed = content.trim_end_matches('\n');
     format!("{trimmed}\n")
 }
 
@@ -86,11 +109,18 @@ pub(super) fn remove_leading_blank_lines(
     content: &str,
     line_map: &[usize],
 ) -> (String, Vec<usize>, Vec<Problem>) {
-    let lines: Vec<&str> = content.lines().collect();
+    let (bom, body) = split_bom(content);
+    let lines: Vec<&str> = body.lines().collect();
     let first_non_blank = lines
         .iter()
         .position(|line| !line.trim().is_empty())
         .unwrap_or(lines.len());
+
+    // With a BOM, the first body "line" is the rest of the BOM line, not a
+    // real blank line; reporting it would recur on every run.
+    if !bom.is_empty() && first_non_blank == lines.len() {
+        return (content.to_string(), line_map.to_vec(), vec![]);
+    }
 
     let problems = if first_non_blank > 0 {
         vec![Problem {
@@ -103,10 +133,12 @@ pub(super) fn remove_leading_blank_lines(
         vec![]
     };
 
-    let result = lines
-        .get(first_non_blank..)
-        .map_or(String::new(), |rest| rest.join("\n"));
-    let new_line_map = line_map[first_non_blank..].to_vec();
+    let (result, new_line_map) = reattach_bom(
+        bom,
+        &lines[first_non_blank..],
+        line_map[first_non_blank..].to_vec(),
+        line_map,
+    );
 
     (result, new_line_map, problems)
 }
@@ -122,39 +154,33 @@ pub(super) fn limit_consecutive_blank_lines(
     let mut blank_count = 0;
     let mut problem_start_line = 0;
 
-    for (line_idx, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
+    // The trailing `None` flushes a run of blanks that reaches end of input.
+    let lines = content.lines().map(Some).chain(std::iter::once(None));
+    for (line_idx, line) in lines.enumerate() {
+        if let Some(blank) = line.filter(|l| l.trim().is_empty()) {
             blank_count += 1;
             if blank_count <= max {
-                result_lines.push(line);
+                result_lines.push(blank);
                 new_line_map.push(line_map[line_idx]);
             } else if blank_count == max + 1 {
                 problem_start_line = line_map[line_idx];
             }
-        } else {
-            if blank_count > max {
-                problems.push(Problem {
-                    line: problem_start_line,
-                    kind: ProblemKind::ExcessiveBlankLines {
-                        found: blank_count,
-                        limit: max,
-                    },
-                });
-            }
-            blank_count = 0;
+            continue;
+        }
+        if blank_count > max {
+            problems.push(Problem {
+                line: problem_start_line,
+                kind: ProblemKind::ExcessiveBlankLines {
+                    found: blank_count,
+                    limit: max,
+                },
+            });
+        }
+        blank_count = 0;
+        if let Some(line) = line {
             result_lines.push(line);
             new_line_map.push(line_map[line_idx]);
         }
-    }
-
-    if blank_count > max {
-        problems.push(Problem {
-            line: problem_start_line,
-            kind: ProblemKind::ExcessiveBlankLines {
-                found: blank_count,
-                limit: max,
-            },
-        });
     }
 
     (result_lines.join("\n"), new_line_map, problems)
@@ -167,8 +193,9 @@ pub(super) fn remove_code_block_remnants(
     let mut problems = vec![];
     let mut result_lines = vec![];
     let mut new_line_map = vec![];
+    let (bom, body) = split_bom(content);
 
-    for (line_idx, line) in content.lines().enumerate() {
+    for (line_idx, line) in body.lines().enumerate() {
         let trimmed = line.trim();
 
         if let Some(after_backticks) = trimmed.strip_prefix("```") {
@@ -190,18 +217,19 @@ pub(super) fn remove_code_block_remnants(
         new_line_map.push(line_map[line_idx]);
     }
 
-    (result_lines.join("\n"), new_line_map, problems)
+    let (result, new_line_map) = reattach_bom(bom, &result_lines, new_line_map, line_map);
+
+    (result, new_line_map, problems)
 }
 
 pub(super) fn remove_zero_width_chars(content: &str, line_map: &[usize]) -> (String, Vec<Problem>) {
     let mut problems = vec![];
     let mut result = String::with_capacity(content.len());
-    let mut char_idx = 0;
 
     for (line_idx, line) in content.lines().enumerate() {
-        for ch in line.chars() {
+        for (col, ch) in line.chars().enumerate() {
             let is_zero_width = ZERO_WIDTH_CHARS.contains(&ch);
-            let is_bom_at_start = ch == '\u{FEFF}' && char_idx == 0;
+            let is_bom_at_start = ch == '\u{FEFF}' && line_idx == 0 && col == 0;
 
             if is_zero_width && !is_bom_at_start {
                 problems.push(Problem {
@@ -211,10 +239,8 @@ pub(super) fn remove_zero_width_chars(content: &str, line_map: &[usize]) -> (Str
             } else {
                 result.push(ch);
             }
-            char_idx += 1;
         }
         result.push('\n');
-        char_idx += 1;
     }
 
     // Remove the trailing newline we added (EOF normalization handles this)
