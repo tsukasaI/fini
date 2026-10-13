@@ -281,11 +281,19 @@ pub fn print_fix_result(
             let (orig, new) = masked_pair(original, &result.content);
             if orig != new {
                 print_diff(&safe_path_display(path), &orig, &new);
-            } else if !result.problems.is_empty() {
+            } else {
                 // No diff header to attach the problem list to (issue #104).
+                // Always named: the file may be counted as fixed with no
+                // problems at all (issue #185).
+                let (color, label) = if result.has_changes() {
+                    (ctx.colors.success, "Would fix:")
+                } else {
+                    (ctx.colors.warning, "Detected:")
+                };
                 println!(
-                    "{}Detected:{} {}",
-                    ctx.colors.warning,
+                    "{}{}{} {}",
+                    color,
+                    label,
                     ctx.colors.reset(),
                     safe_path_display(path)
                 );
