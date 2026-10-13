@@ -69,6 +69,16 @@ pub(crate) fn line_after_pre_trim_fixes(line: &str, remove_zero_width: bool) -> 
     without_zero_width.replace(FULLWIDTH_SPACE, " ")
 }
 
+/// Splits a leading BOM (U+FEFF at position 0) off so line-based fixes see the
+/// first line without it; callers re-attach it to their result.
+fn split_bom(content: &str) -> (&str, &str) {
+    content.split_at(if content.starts_with('\u{FEFF}') {
+        '\u{FEFF}'.len_utf8()
+    } else {
+        0
+    })
+}
+
 pub(super) fn normalize_eof_newline(content: &str) -> String {
     if content.is_empty() {
         return String::new();
@@ -89,7 +99,8 @@ pub(super) fn remove_leading_blank_lines(
     content: &str,
     line_map: &[usize],
 ) -> (String, Vec<usize>, Vec<Problem>) {
-    let lines: Vec<&str> = content.lines().collect();
+    let (bom, body) = split_bom(content);
+    let lines: Vec<&str> = body.lines().collect();
     let first_non_blank = lines
         .iter()
         .position(|line| !line.trim().is_empty())
@@ -106,9 +117,12 @@ pub(super) fn remove_leading_blank_lines(
         vec![]
     };
 
-    let result = lines
-        .get(first_non_blank..)
-        .map_or(String::new(), |rest| rest.join("\n"));
+    let result = format!(
+        "{bom}{}",
+        lines
+            .get(first_non_blank..)
+            .map_or(String::new(), |rest| rest.join("\n"))
+    );
     let new_line_map = line_map[first_non_blank..].to_vec();
 
     (result, new_line_map, problems)
@@ -170,8 +184,9 @@ pub(super) fn remove_code_block_remnants(
     let mut problems = vec![];
     let mut result_lines = vec![];
     let mut new_line_map = vec![];
+    let (bom, body) = split_bom(content);
 
-    for (line_idx, line) in content.lines().enumerate() {
+    for (line_idx, line) in body.lines().enumerate() {
         let trimmed = line.trim();
 
         if let Some(after_backticks) = trimmed.strip_prefix("```") {
@@ -193,7 +208,11 @@ pub(super) fn remove_code_block_remnants(
         new_line_map.push(line_map[line_idx]);
     }
 
-    (result_lines.join("\n"), new_line_map, problems)
+    (
+        format!("{bom}{}", result_lines.join("\n")),
+        new_line_map,
+        problems,
+    )
 }
 
 pub(super) fn remove_zero_width_chars(content: &str, line_map: &[usize]) -> (String, Vec<Problem>) {

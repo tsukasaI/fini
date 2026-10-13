@@ -499,6 +499,33 @@ mod tests {
     }
 
     #[test]
+    fn test_bom_does_not_block_leading_blank_removal() {
+        let input = "\u{FEFF}\n\nfoo\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.content, "\u{FEFF}foo\n");
+        let problem = result
+            .problems
+            .iter()
+            .find(|p| matches!(p.kind, ProblemKind::LeadingBlankLines { count: 2 }));
+        assert_eq!(problem.map(|p| p.line), Some(1));
+    }
+
+    #[test]
+    fn test_bom_does_not_block_first_line_fence_removal() {
+        let config = NormalizeConfig {
+            fix_code_blocks: true,
+            ..NormalizeConfig::default()
+        };
+        let input = "\u{FEFF}```py\nx\n```\n";
+        let result = normalize_content(input, &config);
+        assert_eq!(result.content, "\u{FEFF}x\n");
+        assert!(result
+            .problems
+            .iter()
+            .any(|p| matches!(p.kind, ProblemKind::CodeBlockRemnant) && p.line == 1));
+    }
+
+    #[test]
     fn test_remove_zwsp() {
         let input = "hello\u{200B}world\n";
         let result = normalize_content(input, &NormalizeConfig::default());
