@@ -126,73 +126,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
             .collect();
 
         for (path, outcome) in &outcomes {
-            match outcome {
-                FileOutcome::Skipped { reason } => {
-                    // Empty files are trivially "done"; only count skips that mean
-                    // "this file was not inspected" (binary, non-UTF-8, symlink)
-                    if *reason != "empty" {
-                        result.skipped += 1;
-                    }
-                    if ctx.verbose {
-                        output::print_skipped(path, reason, ctx);
-                    }
-                }
-                FileOutcome::Clean { suppressed } => {
-                    record_suppressed(path, suppressed, &mut result);
-                    if ctx.verbose {
-                        output::print_checked(path, ctx);
-                    }
-                }
-                FileOutcome::Changed {
-                    original,
-                    result: normalize_result,
-                    modified,
-                    len,
-                } => {
-                    record_suppressed(path, &normalize_result.suppressed, &mut result);
-                    let fullwidth_count = normalize_result
-                        .problems
-                        .iter()
-                        .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
-                        .count();
-                    result.warnings += fullwidth_count;
-
-                    if config.check_only {
-                        result.files_with_problems += 1;
-                        output::print_check_result(
-                            path,
-                            original,
-                            normalize_result,
-                            ctx,
-                            config.normalize.remove_zero_width,
-                        );
-                    } else {
-                        if normalize_result.has_changes() {
-                            if config.should_write() {
-                                if let Err(e) =
-                                    write_atomic(path, &normalize_result.content, *modified, *len)
-                                {
-                                    eprintln!(
-                                        "Error writing {}: {e}",
-                                        output::safe_path_display(path)
-                                    );
-                                    result.errors += 1;
-                                    continue;
-                                }
-                            }
-                            // Counts files that changed whether or not they were
-                            // actually written — --diff previews without writing,
-                            // and print_summary picks the wording accordingly.
-                            result.files_fixed += 1;
-                        }
-                        output::print_fix_result(path, original, normalize_result, ctx);
-                    }
-                }
-                FileOutcome::Error(e) => {
-                    eprintln!("Error processing {}: {e}", output::safe_path_display(path));
-                    result.errors += 1;
-                }
-            }
+            apply_outcome(path, outcome, config, ctx, &mut result);
         }
     }
 
@@ -201,6 +135,78 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     output::print_summary(&result, config, ctx);
 
     Ok(result)
+}
+
+/// Apply one file's outcome sequentially: output, writes, stats.
+fn apply_outcome(
+    path: &Path,
+    outcome: &FileOutcome,
+    config: &Config,
+    ctx: &OutputContext,
+    result: &mut RunResult,
+) {
+    match outcome {
+        FileOutcome::Skipped { reason } => {
+            // Empty files are trivially "done"; only count skips that mean
+            // "this file was not inspected" (binary, non-UTF-8, symlink)
+            if *reason != "empty" {
+                result.skipped += 1;
+            }
+            if ctx.verbose {
+                output::print_skipped(path, reason, ctx);
+            }
+        }
+        FileOutcome::Clean { suppressed } => {
+            record_suppressed(path, suppressed, result);
+            if ctx.verbose {
+                output::print_checked(path, ctx);
+            }
+        }
+        FileOutcome::Changed {
+            original,
+            result: normalize_result,
+            modified,
+            len,
+        } => {
+            record_suppressed(path, &normalize_result.suppressed, result);
+            let fullwidth_count = normalize_result
+                .problems
+                .iter()
+                .filter(|p| matches!(p.kind, ProblemKind::FullWidthSpace))
+                .count();
+            result.warnings += fullwidth_count;
+
+            if config.check_only {
+                result.files_with_problems += 1;
+                output::print_check_result(
+                    path,
+                    original,
+                    normalize_result,
+                    ctx,
+                    config.normalize.remove_zero_width,
+                );
+                return;
+            }
+            if normalize_result.has_changes() {
+                if config.should_write() {
+                    if let Err(e) = write_atomic(path, &normalize_result.content, *modified, *len) {
+                        eprintln!("Error writing {}: {e}", output::safe_path_display(path));
+                        result.errors += 1;
+                        return;
+                    }
+                }
+                // Counts files that changed whether or not they were
+                // actually written; --diff previews without writing,
+                // and print_summary picks the wording accordingly.
+                result.files_fixed += 1;
+            }
+            output::print_fix_result(path, original, normalize_result, ctx);
+        }
+        FileOutcome::Error(e) => {
+            eprintln!("Error processing {}: {e}", output::safe_path_display(path));
+            result.errors += 1;
+        }
+    }
 }
 
 /// Process a single file: read, validate, normalize. Pure computation, no output.
