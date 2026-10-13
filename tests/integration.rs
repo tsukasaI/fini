@@ -1206,6 +1206,36 @@ fn test_check_diff_shows_detection_only_problems() {
 }
 
 #[test]
+fn test_stdin_check_ignore_fullwidth_still_reports_line_1() {
+    // Issue #165: fix-type kinds are not suppressible, so --check must explain
+    // why it fails instead of printing a bare `Error: stdin`.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .arg("--stdin")
+        .arg("--check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all("a\u{3000}b # fini:ignore fullwidth\n".as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("line 1"), "missing line-1 bullet: {stderr}");
+}
+
+#[test]
 fn test_stdin_check_diff_goes_to_stderr() {
     // Regression test for issue #38: --stdin --check --diff must keep stdout
     // clean (its contract is "normalized content only") and put the diff on
