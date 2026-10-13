@@ -1,4 +1,4 @@
-use ignore::overrides::OverrideBuilder;
+use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -138,83 +138,92 @@ pub fn walk_paths(
         // so a tracked file it excludes is still rescued.
         let root = Path::new(path);
         if root.is_dir() {
-            for rel in git_tracked_files_relative(root) {
-                // `git ls-files` prints index entries verbatim — git
-                // validates a path when it's added, not when the index is
-                // read back, so a hand-crafted .git/index (a shipped tarball,
-                // not a clone) could contain an absolute path or a `..`
-                // component. root.join() on such a path would discard root
-                // entirely, so reject anything but plain path components
-                // before it's ever joined.
-                if !is_plain_relative_path(&rel) {
-                    continue;
-                }
-
-                // Mirrors builder.hidden(!include_hidden): skip any path
-                // with a dotfile/dotdir component, unless --hidden opted
-                // into scanning those too (issue #101) - a tracked-and-
-                // gitignored secret under a dotfile/dotdir (.env,
-                // .github/workflows/*.yml) is exactly the #101 scenario
-                // this rescue must not silently exempt.
-                if !include_hidden
-                    && rel
-                        .components()
-                        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-                {
-                    continue;
-                }
-
-                let abs = root.join(&rel);
-
-                // Cheap dedup check first: the vast majority of tracked
-                // files were already found by the primary walk, so skip the
-                // lstat-per-ancestor work below for those.
-                let key = dedup_key(&abs, &mut canon_parent_cache);
-                if seen.contains(&key) {
-                    continue;
-                }
-
-                // A directory-level exclude (e.g. "vendor/") prunes the
-                // directory in the primary walk before any file under it is
-                // ever tested; a symlinked intermediate directory is never
-                // descended into by the primary walk either (issue #35). Both
-                // are properties of the path itself, so check every ancestor
-                // between the file and root — not just the file path — for
-                // either.
-                let ancestor_blocked =
-                    abs.ancestors().skip(1).take_while(|a| *a != root).any(|a| {
-                        fs::symlink_metadata(a)
-                            .map(|m| m.is_symlink())
-                            .unwrap_or(true)
-                            || overrides_built
-                                .as_ref()
-                                .is_some_and(|o| o.matched(a, true).is_ignore())
-                    });
-                if ancestor_blocked {
-                    continue;
-                }
-                if overrides_built
-                    .as_ref()
-                    .is_some_and(|o| o.matched(&abs, false).is_ignore())
-                {
-                    continue;
-                }
-
-                // symlink_metadata (not metadata): the primary walk never
-                // follows symlinks into content outside the tree (issue
-                // #35), so this rescue must not either.
-                let is_file = fs::symlink_metadata(&abs)
-                    .map(|m| m.is_file())
-                    .unwrap_or(false);
-                if is_file {
-                    seen.insert(key);
-                    all_files.push(Ok(abs));
-                }
-            }
+            rescue_tracked_files(
+                root,
+                include_hidden,
+                overrides_built.as_ref(),
+                &mut seen,
+                &mut canon_parent_cache,
+                &mut all_files,
+            );
         }
     }
 
     Ok(all_files.into_iter())
+}
+
+/// Mirrors `builder.hidden(!include_hidden)`: any dotfile/dotdir component.
+fn has_hidden_component(rel: &Path) -> bool {
+    rel.components()
+        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+}
+
+fn is_override_ignored(overrides: Option<&Override>, path: &Path, is_dir: bool) -> bool {
+    overrides.is_some_and(|o| o.matched(path, is_dir).is_ignore())
+}
+
+fn rescue_tracked_files(
+    root: &Path,
+    include_hidden: bool,
+    overrides: Option<&Override>,
+    seen: &mut HashSet<PathBuf>,
+    canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+    all_files: &mut Vec<io::Result<PathBuf>>,
+) {
+    for rel in git_tracked_files_relative(root) {
+        // `git ls-files` prints index entries verbatim; git validates a
+        // path when it's added, not when the index is read back, so a
+        // hand-crafted .git/index (a shipped tarball, not a clone) could
+        // hold an absolute path or a `..` component. root.join() on such a
+        // path would discard root entirely, so reject anything but plain
+        // components before it's ever joined.
+        if !is_plain_relative_path(&rel) {
+            continue;
+        }
+
+        // Hidden paths are skipped unless --hidden: a tracked-and-gitignored
+        // file under .env or .github/workflows/ is exactly the #101 case.
+        if !include_hidden && has_hidden_component(&rel) {
+            continue;
+        }
+
+        let abs = root.join(&rel);
+
+        // Cheap dedup first: most tracked files were already found by the
+        // primary walk, so skip the lstat-per-ancestor work below for those.
+        let key = dedup_key(&abs, canon_parent_cache);
+        if seen.contains(&key) {
+            continue;
+        }
+
+        // The primary walk prunes an excluded directory before testing any
+        // file under it, and never descends a symlinked directory (issue
+        // #35). Both are properties of the path, so check every ancestor
+        // between the file and root, not just the file path.
+        let ancestor_blocked = abs.ancestors().skip(1).take_while(|a| *a != root).any(|a| {
+            fs::symlink_metadata(a)
+                .map(|m| m.is_symlink())
+                .unwrap_or(true)
+                || is_override_ignored(overrides, a, true)
+        });
+        if ancestor_blocked {
+            continue;
+        }
+        if is_override_ignored(overrides, &abs, false) {
+            continue;
+        }
+
+        // symlink_metadata (not metadata): the primary walk never follows
+        // symlinks into content outside the tree (issue #35), so neither
+        // may this rescue.
+        let is_file = fs::symlink_metadata(&abs)
+            .map(|m| m.is_file())
+            .unwrap_or(false);
+        if is_file {
+            seen.insert(key);
+            all_files.push(Ok(abs));
+        }
+    }
 }
 
 /// Lists files tracked by git under `root`, as paths relative to `root`.
@@ -350,6 +359,75 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    fn strip_git_env(cmd: &mut Command) {
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+            "GIT_PREFIX",
+        ] {
+            cmd.env_remove(var);
+        }
+        for (var, _) in std::env::vars_os() {
+            if var.to_string_lossy().starts_with("GIT_") {
+                cmd.env_remove(var);
+            }
+        }
+    }
+
+    fn git_command() -> Command {
+        let mut cmd = Command::new("git");
+        strip_git_env(&mut cmd);
+        cmd
+    }
+
+    fn git_init(dir: &Path) {
+        assert!(git_command()
+            .args(["init", "-q"])
+            .arg(dir)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    fn git_in<const N: usize>(dir: &Path, args: [&str; N]) {
+        assert!(git_command()
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[test]
+    fn test_issue_164_git_helper_strips_inherited_git_env() {
+        let mut cmd = Command::new("git");
+        cmd.env("GIT_DIR", "/nonexistent/fini-bogus")
+            .env("GIT_INDEX_FILE", "/nonexistent/fini-bogus-index");
+        strip_git_env(&mut cmd);
+        for var in ["GIT_DIR", "GIT_INDEX_FILE"] {
+            let entry = cmd.get_envs().find(|(k, _)| *k == var).unwrap();
+            assert_eq!(entry.1, None, "{var} must be removed, not passed through");
+        }
+
+        let dir = TempDir::new().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("a.txt"), "x\n").unwrap();
+        git_in(dir.path(), ["add", "a.txt"]);
+        let out = git_command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["ls-files"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
+    }
 
     #[test]
     fn test_dedup_key_falls_back_to_literal_path_when_parent_missing() {
@@ -493,23 +571,11 @@ mod tests {
         // git_global(true) consult the machine's actual global gitignore,
         // which commonly lists .env.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
 
         let tracked = dir.path().join(".fini_test_hidden_tracked");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", ".fini_test_hidden_tracked"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", ".fini_test_hidden_tracked"]);
         fs::write(dir.path().join(".gitignore"), ".fini_test_hidden_tracked\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -842,23 +908,11 @@ mod tests {
         // it, not silently drop it (and any secret it contains) from
         // scanning.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
 
         let tracked = dir.path().join("tracked.env");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", "tracked.env"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", "tracked.env"]);
 
         // Now ignore it — git keeps tracking it regardless.
         fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
@@ -880,13 +934,7 @@ mod tests {
         // A file that was never tracked and matches .gitignore must remain
         // excluded — the fix only rescues already-tracked files.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
         fs::write(dir.path().join("ignored.txt"), "never tracked").unwrap();
 
@@ -907,22 +955,10 @@ mod tests {
         // an incidental .gitignore match, so they must still suppress an
         // already-tracked file.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         let tracked = dir.path().join("tracked.env");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", "tracked.env"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", "tracked.env"]);
         fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -941,23 +977,11 @@ mod tests {
         // tracked file under that directory, not just a tracked file whose
         // own path happens to match the pattern.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         fs::create_dir(dir.path().join("vendor")).unwrap();
         let tracked = dir.path().join("vendor/lib.rs");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", "vendor/lib.rs"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", "vendor/lib.rs"]);
         fs::write(dir.path().join(".gitignore"), "vendor/\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -981,25 +1005,13 @@ mod tests {
         // are skipped) — the gitignore rescue must not override that
         // unrelated rule.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         let tracked = dir.path().join(".env");
         fs::write(&tracked, "SECRET=hunter2\n").unwrap();
         // -f: the user's global gitignore commonly excludes .env, which
         // would otherwise make `git add` refuse it here regardless of this
         // repo's own (not-yet-written) .gitignore.
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "-f", ".env"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "-f", ".env"]);
         fs::write(dir.path().join(".gitignore"), ".env\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -1021,24 +1033,12 @@ mod tests {
         // gitignore rescue must use symlink_metadata, not metadata, or it
         // would stat through a tracked symlink to content outside the tree.
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         let target = dir.path().join("outside_target.txt");
         fs::write(&target, "hello").unwrap();
         let link = dir.path().join("link.txt");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "link.txt"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "link.txt"]);
         fs::write(dir.path().join(".gitignore"), "link.txt\n").unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
@@ -1066,13 +1066,7 @@ mod tests {
         fs::write(outside_target.join("tracked.txt"), "hello").unwrap();
 
         let dir = TempDir::new().unwrap();
-        assert!(Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(dir.path())
-            .status()
-            .unwrap()
-            .success());
+        git_init(dir.path());
         // Track "sub/tracked.txt" as a real directory first, so the git
         // index still references that path once "sub" is replaced with a
         // symlink below — this is how a tracked path ends up "inside" what
@@ -1080,13 +1074,7 @@ mod tests {
         let sub = dir.path().join("sub");
         fs::create_dir(&sub).unwrap();
         fs::write(sub.join("tracked.txt"), "hello").unwrap();
-        assert!(Command::new("git")
-            .args(["-C"])
-            .arg(dir.path())
-            .args(["add", "sub/tracked.txt"])
-            .status()
-            .unwrap()
-            .success());
+        git_in(dir.path(), ["add", "sub/tracked.txt"]);
         fs::remove_dir_all(&sub).unwrap();
         std::os::unix::fs::symlink(&outside_target, &sub).unwrap();
         fs::write(dir.path().join(".gitignore"), "sub/\n").unwrap();
