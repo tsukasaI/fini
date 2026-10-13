@@ -47,10 +47,40 @@ pub fn is_binary(content: &[u8]) -> bool {
     content[..check_len].contains(&0)
 }
 
+/// Why a file was not normalized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SkipReason {
+    Empty,
+    Symlink,
+    TooLarge,
+    Utf16,
+    Binary,
+    NonUtf8,
+}
+
+impl SkipReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Symlink => "symlink",
+            Self::TooLarge => "too large (exceeds max-file-size)",
+            Self::Utf16 => "UTF-16 (unsupported encoding)",
+            Self::Binary => "binary",
+            Self::NonUtf8 => "non-UTF-8",
+        }
+    }
+
+    /// Empty files are trivially "done"; every other skip means "this file
+    /// was not inspected".
+    fn counts_as_skipped(self) -> bool {
+        !matches!(self, Self::Empty)
+    }
+}
+
 /// Result of processing a single file (pure data, no side effects)
 enum FileOutcome {
     Skipped {
-        reason: &'static str,
+        reason: SkipReason,
     },
     Clean {
         suppressed: Vec<Problem>,
@@ -147,13 +177,11 @@ fn apply_outcome(
 ) {
     match outcome {
         FileOutcome::Skipped { reason } => {
-            // Empty files are trivially "done"; only count skips that mean
-            // "this file was not inspected" (binary, non-UTF-8, symlink)
-            if *reason != "empty" {
+            if reason.counts_as_skipped() {
                 result.skipped += 1;
             }
             if ctx.verbose {
-                output::print_skipped(path, reason, ctx);
+                output::print_skipped(path, reason.label(), ctx);
             }
         }
         FileOutcome::Clean { suppressed } => {
@@ -215,7 +243,9 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
     // rewrite a target that may live outside the walked tree (issue #35)
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            return FileOutcome::Skipped { reason: "symlink" }
+            return FileOutcome::Skipped {
+                reason: SkipReason::Symlink,
+            }
         }
         Ok(_) => {}
         Err(e) => return FileOutcome::Error(e),
@@ -236,7 +266,7 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
     // (issue #103).
     if len > normalize_config.max_file_size {
         return FileOutcome::Skipped {
-            reason: "too large (exceeds max-file-size)",
+            reason: SkipReason::TooLarge,
         };
     }
 
@@ -251,19 +281,23 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
     }
 
     if bytes.is_empty() {
-        return FileOutcome::Skipped { reason: "empty" };
+        return FileOutcome::Skipped {
+            reason: SkipReason::Empty,
+        };
     }
 
     // A UTF-16 BOM means text in an encoding fini doesn't process; report the
     // skip reason accurately instead of lumping it in with "binary" (issue #40)
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
         return FileOutcome::Skipped {
-            reason: "UTF-16 (unsupported encoding)",
+            reason: SkipReason::Utf16,
         };
     }
 
     if is_binary(&bytes) {
-        return FileOutcome::Skipped { reason: "binary" };
+        return FileOutcome::Skipped {
+            reason: SkipReason::Binary,
+        };
     }
 
     // Bound this read too: the size gate above only checked the length at
@@ -283,7 +317,7 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
     }
     if bytes.len() as u64 > normalize_config.max_file_size {
         return FileOutcome::Skipped {
-            reason: "too large (exceeds max-file-size)",
+            reason: SkipReason::TooLarge,
         };
     }
 
@@ -291,7 +325,7 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
         Ok(s) => s,
         Err(_) => {
             return FileOutcome::Skipped {
-                reason: "non-UTF-8",
+                reason: SkipReason::NonUtf8,
             }
         }
     };
