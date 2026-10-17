@@ -1,9 +1,9 @@
 //! TOML schema definitions for fini.toml
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// Root structure for fini.toml
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FiniToml {
     #[serde(default)]
@@ -15,7 +15,7 @@ pub struct FiniToml {
 }
 
 /// `[normalize]` section in fini.toml
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NormalizeSection {
     /// Maximum consecutive blank lines (None = no limit)

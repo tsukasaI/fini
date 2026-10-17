@@ -291,6 +291,10 @@ fn test_init_creates_config_file() {
         .unwrap();
 
     assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        "Created fini.toml"
+    );
 
     let config_path = dir.path().join("fini.toml");
     assert!(config_path.exists());
@@ -1791,6 +1795,15 @@ fn test_stdin_nul_bytes_exit_2_without_output() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("binary"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_stdin_non_utf8_exits_2_without_output() {
+    let output = run_stdin(&[], b"\xc3\x28 bad\n");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("non-UTF-8"), "stderr: {stderr}");
 }
 
 #[test]

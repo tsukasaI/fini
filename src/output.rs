@@ -74,7 +74,7 @@ impl OutputContext {
         Self {
             mode,
             colors: Colors::new(use_colors),
-            verbose,
+            verbose: verbose && mode != OutputMode::Quiet,
             show_progress,
         }
     }
@@ -383,9 +383,6 @@ pub fn warn_suppressed_secrets(label: &str, suppressed: &[Problem]) -> usize {
 }
 
 pub fn print_checked(path: &Path, ctx: &OutputContext) {
-    if ctx.mode == OutputMode::Quiet {
-        return;
-    }
     println!(
         "{}Checked:{} {}",
         ctx.colors.info,
@@ -395,9 +392,6 @@ pub fn print_checked(path: &Path, ctx: &OutputContext) {
 }
 
 pub fn print_skipped(path: &Path, reason: &str, ctx: &OutputContext) {
-    if ctx.mode == OutputMode::Quiet {
-        return;
-    }
     println!(
         "{}Skipping {}: {}{}",
         ctx.colors.info,
