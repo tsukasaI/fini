@@ -8,8 +8,36 @@ fn fini_cmd() -> Command {
     // Not the inherited cwd: cargo runs tests from the package root, which is a git
     // repo, so a developer's fini.toml there would leak into every test via the
     // upward config search. An empty dir outside any repo has nothing to find.
+    //
+    // The shared default cwd is writable, so a test running a mutating mode (e.g.
+    // `--init`) without its own `.current_dir(...)` would write into it and leak into
+    // every other test. Such tests must always set `.current_dir` to their own dir.
+    //
+    // A static is never dropped, so this dir is left behind after the run; the
+    // `fini-it-cwd-` prefix makes those leftovers easy to recognize and sweep.
     static HERMETIC_CWD: OnceLock<TempDir> = OnceLock::new();
-    let cwd = HERMETIC_CWD.get_or_init(|| TempDir::new().unwrap());
+    let cwd = HERMETIC_CWD.get_or_init(|| {
+        let dir = tempfile::Builder::new()
+            .prefix("fini-it-cwd-")
+            .tempdir()
+            .unwrap();
+        // Hermeticity silently fails if TMPDIR sits inside a git repo (fini.toml is
+        // searched upward to the git root) or under a directory with an .editorconfig
+        // (searched upward to `/`). Fail loudly instead, as the unit tests do.
+        for ancestor in dir.path().ancestors() {
+            for marker in [".git", ".editorconfig"] {
+                assert!(
+                    !ancestor.join(marker).exists(),
+                    "integration tests need a hermetic cwd, but {} contains `{marker}` \
+                     (an ancestor of the temp dir {}). Point TMPDIR at a directory \
+                     outside any git repo / .editorconfig tree.",
+                    ancestor.display(),
+                    dir.path().display(),
+                );
+            }
+        }
+        dir
+    });
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fini"));
     cmd.current_dir(cwd.path());
     cmd
