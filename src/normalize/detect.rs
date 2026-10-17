@@ -197,6 +197,9 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
+            // Same strip as `mask_secret_lines`, so `--keep-zero-width` can't
+            // hide a split secret from the check while the diff masks it.
+            let line = &*strip_mask_ignorable(line);
             patterns.iter().find_map(|pattern| {
                 // find_iter (not find): a skipped placeholder match must not
                 // short-circuit past a later, unrelated real secret matching
@@ -214,12 +217,28 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
         .collect()
 }
 
-/// Zero-width characters ignored by the secret-match decision in
-/// `mask_secret_lines`. Mirrors `fix::ZERO_WIDTH_CHARS` (including a BOM at
-/// position 0, which the fixer preserves but masking must still see through).
-const MASK_ZERO_WIDTH_CHARS: &[char] = &[
-    '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{2060}', '\u{FEFF}',
-];
+/// Default_Ignorable_Code_Point members that render as nothing, so they can
+/// split a secret invisibly. A superset of `fix::ZERO_WIDTH_CHARS` (enforced by
+/// a test); over-stripping is safe because the stripped text only feeds the
+/// secret-match decision.
+fn is_mask_ignorable(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}'
+        | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180F}'
+        | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}'
+        | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF0}'..='\u{FFF8}'
+        | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0000}'..='\u{E0FFF}')
+}
+
+fn strip_mask_ignorable(text: &str) -> Cow<'_, str> {
+    if text.contains(is_mask_ignorable) {
+        Cow::Owned(text.chars().filter(|&c| !is_mask_ignorable(c)).collect())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
 
 /// Replace every line matching a secret pattern with a hint-only placeholder.
 ///
@@ -232,23 +251,16 @@ const MASK_ZERO_WIDTH_CHARS: &[char] = &[
 /// diff shows raw secret-shaped text — an unrelated trailing comment (or any
 /// other skip-pattern occurrence) must not un-mask a real secret (issue #77).
 ///
-/// Zero-width characters are stripped from each line before the match
-/// decision, regardless of `--keep-zero-width`: a zero-width char inside a
-/// secret (e.g. `hunter<ZWSP>2hunter2`) would otherwise split the value so no
-/// regex matches and the raw line leaks into the diff (issue #156). Only the
-/// decision uses the stripped text; a masked line is replaced wholesale and an
-/// unmatched line is emitted unchanged.
+/// Invisible characters are stripped before the match decision (a BOM at
+/// position 0 included), regardless of `--keep-zero-width`, so they cannot
+/// split a secret and leak the raw line (issue #156).
 pub(super) fn mask_secret_lines(content: &str) -> String {
     let patterns = &*SECRET_PATTERNS;
     let mut out = String::with_capacity(content.len());
 
     for line in content.split_inclusive('\n') {
         let text = line.strip_suffix('\n').unwrap_or(line);
-        let stripped: Cow<str> = if text.contains(MASK_ZERO_WIDTH_CHARS) {
-            Cow::Owned(text.replace(MASK_ZERO_WIDTH_CHARS, ""))
-        } else {
-            Cow::Borrowed(text)
-        };
+        let stripped = strip_mask_ignorable(text);
         let hint = patterns
             .iter()
             .find(|p| p.regex.is_match(&stripped))
@@ -578,6 +590,39 @@ mod tests {
         assert!(!masked.contains("hunter\u{200B}2hunter2"));
         assert!(!masked.contains("hunter2hunter2"));
         assert!(masked.contains("[line masked: potential hardcoded secret]"));
+    }
+
+    #[test]
+    fn test_mask_set_is_superset_of_fixer_zero_width_set() {
+        for c in crate::normalize::fix::ZERO_WIDTH_CHARS {
+            assert!(
+                is_mask_ignorable(*c),
+                "U+{:04X} missing from mask set",
+                *c as u32
+            );
+        }
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_secret_split_by_other_invisibles() {
+        for c in ['\u{00AD}', '\u{2062}', '\u{FE0F}', '\u{2066}', '\u{E0001}'] {
+            let line = format!("token = \"ghp_ABCDEFGHIJKLMNOPQRS{c}TUVWXYZabcdefghijklmn\"\n");
+            let masked = mask_secret_lines(&line);
+            assert!(
+                !masked.contains("ghp_"),
+                "U+{:04X} leaked: {masked}",
+                c as u32
+            );
+            assert!(masked.contains("[line masked: potential"));
+        }
+    }
+
+    #[test]
+    fn test_detect_secret_patterns_sees_through_invisibles_with_correct_line() {
+        let content = "ok\naws_access_key_id = AKIA\u{00AD}ABCDEFGHIJKLMNOP\n";
+        let problems = detect_secret_patterns(content, &identity_map(content));
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].line, 2);
     }
 
     #[test]

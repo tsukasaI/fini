@@ -13,7 +13,7 @@ use fix::{
     remove_zero_width_chars,
 };
 
-pub(crate) use fix::{line_after_pre_trim_fixes, normalize_line_endings};
+pub(crate) use fix::{line_after_pre_trim_fixes, normalize_line_endings, trim_trailing_ws};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizeConfig {

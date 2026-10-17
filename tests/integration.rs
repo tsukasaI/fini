@@ -1144,6 +1144,99 @@ fn test_diff_masks_secret_split_by_zero_width_in_file_mode() {
 }
 
 #[test]
+fn test_check_diff_masks_secret_split_by_zero_width_in_file_mode() {
+    // issue #156, --check variant of the file-mode test above.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.env");
+    fs::write(
+        &file,
+        "password = \"hunter\u{200B}2hunter2\"\ncode here   \n",
+    )
+    .unwrap();
+
+    for keep in [false, true] {
+        let mut cmd = fini_cmd();
+        cmd.arg("--check").arg("--diff");
+        if keep {
+            cmd.arg("--keep-zero-width");
+        }
+        let output = cmd.arg(file.to_str().unwrap()).output().unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for text in [&stdout, &stderr] {
+            assert!(
+                !text.contains("hunter2hunter2") && !text.contains("hunter\u{200B}2hunter2"),
+                "raw secret leaked (keep_zero_width={keep}): {text}"
+            );
+        }
+        assert!(
+            stdout.contains("[line masked: potential hardcoded secret]"),
+            "masked placeholder missing (keep_zero_width={keep}): {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_diff_masks_secret_split_by_other_invisible_chars() {
+    // issue #179: invisible code points beyond the fixer's zero-width set.
+    let dir = TempDir::new().unwrap();
+    for invisible in ['\u{00AD}', '\u{2062}', '\u{FE0F}', '\u{2066}'] {
+        let file = dir.path().join("test.env");
+        let raw =
+            format!("aws_access_key_id = \"AKIAABCD{invisible}EFGHIJKLMNOP\"\ncode here   \n");
+        fs::write(&file, &raw).unwrap();
+
+        for check in [false, true] {
+            let mut cmd = fini_cmd();
+            if check {
+                cmd.arg("--check");
+            }
+            let output = cmd
+                .arg("--diff")
+                .arg(file.to_str().unwrap())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for text in [&stdout, &stderr] {
+                assert!(
+                    !text.contains("AKIAABCD") && !text.contains("EFGHIJKLMNOP"),
+                    "raw secret leaked (U+{:04X}, check={check}): {text}",
+                    invisible as u32
+                );
+            }
+            assert!(
+                stdout.contains("[line masked: potential"),
+                "masked placeholder missing (U+{:04X}, check={check}): {stdout}",
+                invisible as u32
+            );
+        }
+    }
+}
+
+#[test]
+fn test_check_keep_zero_width_reports_split_secret() {
+    // issue #179: detection must see through invisibles like the diff mask does.
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.env");
+    fs::write(&file, "password = \"hunter\u{200B}2hunter2\"\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg("--keep-zero-width")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("potential secret"),
+        "split secret not reported: {stdout}"
+    );
+    assert!(stdout.contains("line 1"), "wrong line: {stdout}");
+}
+
+#[test]
 fn test_stdin_check_diff_masks_secret_split_by_zero_width() {
     use std::io::Write;
     use std::process::Stdio;

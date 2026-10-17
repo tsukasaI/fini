@@ -1,7 +1,7 @@
 use crate::colors::Colors;
 use crate::normalize::{
-    line_after_pre_trim_fixes, mask_secret_lines, normalize_line_endings, NormalizeConfig,
-    NormalizeResult, Problem, ProblemKind,
+    line_after_pre_trim_fixes, mask_secret_lines, normalize_line_endings, trim_trailing_ws,
+    NormalizeConfig, NormalizeResult, Problem, ProblemKind,
 };
 use similar::{ChangeTag, TextDiff};
 use std::io::{self, Write};
@@ -210,7 +210,7 @@ pub fn print_change_summary_to<W: Write>(
         // against the pre-trim-fixed line rather than the raw one
         // (issue #94).
         let after_earlier_fixes = line_after_pre_trim_fixes(orig_line, remove_zero_width);
-        if after_earlier_fixes.len() != after_earlier_fixes.trim_end_matches([' ', '\t']).len() {
+        if after_earlier_fixes.len() != trim_trailing_ws(&after_earlier_fixes).len() {
             writeln!(w, "  - trailing whitespace at line {}", i + 1)?;
         }
     }
