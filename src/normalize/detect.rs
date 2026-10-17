@@ -449,27 +449,25 @@ mod tests {
         assert_eq!(problems.len(), 1);
     }
 
+    // Quoted so each input matches the "hardcoded secret" regex; only a skip
+    // pattern inside the match suppresses it. `std::env` can't appear in a
+    // match (`:` is outside the value class), nor can the placeholder
+    // markers (`<your-`, `${`, `{{`, `ENV[`).
     #[test]
     fn test_secret_skip_env_var_reference() {
-        let content = "password = process.env.PASSWORD\n";
-        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
-        let content = "key = os.environ['API_KEY']\n";
-        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
-        let content = "key = std::env::var(\"KEY\")\n";
-        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
+        for content in [
+            "api_key = \"os.environ.API_KEY\"\n",
+            "API_KEY = \"process.env.API_KEY\"\n",
+            "password = \"getenv.PASSWORD\"\n",
+        ] {
+            assert!(
+                detect_secret_patterns(content, &identity_line_map(content)).is_empty(),
+                "{content:?}"
+            );
+        }
     }
 
-    #[test]
-    fn test_secret_skip_placeholder() {
-        let content = "api_key = \"<your-api-key>\"\n";
-        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
-        let content = "token = \"${API_TOKEN}\"\n";
-        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
-    }
-
-    // A quoted value that itself matches a skip pattern (unlike the cases
-    // above, which never match any secret regex regardless of skip logic)
-    // is still legitimately skipped from detection.
+    // A quoted value that itself matches a skip pattern is skipped from detection.
     #[test]
     fn test_secret_skip_quoted_env_reference() {
         let content = "api_key = \"process.env.API_KEY\"\n";
