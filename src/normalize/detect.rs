@@ -213,13 +213,17 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
         .collect()
 }
 
-/// Default_Ignorable_Code_Point members that render as nothing, so they can
-/// split a secret invisibly. A superset of `fix::ZERO_WIDTH_CHARS` (enforced by
-/// a test); over-stripping is safe because the stripped text only feeds the
-/// secret-match decision.
+/// Default_Ignorable_Code_Point members plus control characters (C0 except
+/// `\t\n\r`, DEL, C1, U+2028/U+2029) that render as nothing or as blank, so
+/// they can split a secret invisibly. A superset of `fix::ZERO_WIDTH_CHARS`
+/// (enforced by a test); over-stripping is safe because the stripped text only
+/// feeds the secret-match decision. Not `char::is_control()`: that would also
+/// strip `\t`, merging tokens a tab separates.
 fn is_mask_ignorable(c: char) -> bool {
     matches!(c,
-        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}'
+        '\u{00}'..='\u{08}' | '\u{0B}'..='\u{0C}' | '\u{0E}'..='\u{1F}' | '\u{7F}'..='\u{9F}'
+        | '\u{2028}' | '\u{2029}'
+        | '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}'
         | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180F}'
         | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
         | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}'
@@ -616,6 +620,37 @@ mod tests {
                 c as u32
             );
             assert!(masked.contains("[line masked: potential"));
+        }
+    }
+
+    // issue #213: control characters render as nothing in a terminal too.
+    #[test]
+    fn test_secret_split_by_control_chars_is_masked_and_detected() {
+        for c in [
+            '\u{0001}', '\u{0008}', '\u{000B}', '\u{001F}', '\u{007F}', '\u{0085}', '\u{009F}',
+            '\u{2028}', '\u{2029}',
+        ] {
+            let line = format!("token = \"ghp_ABCDEFGHIJKLMNOPQRS{c}TUVWXYZabcdefghijklmn\"\n");
+            let masked = mask_secret_lines(&line);
+            assert!(
+                !masked.contains("ghp_"),
+                "U+{:04X} leaked: {masked}",
+                c as u32
+            );
+            assert!(masked.contains("[line masked: potential"));
+            let problems = detect_secret_patterns(&line, &identity_line_map(&line));
+            assert_eq!(problems.len(), 1, "U+{:04X} not detected", c as u32);
+        }
+    }
+
+    #[test]
+    fn test_is_mask_ignorable_keeps_tab_newline_and_cr() {
+        for c in ['\t', '\n', '\r', ' ', 'a'] {
+            assert!(
+                !is_mask_ignorable(c),
+                "U+{:04X} must not be stripped",
+                c as u32
+            );
         }
     }
 
