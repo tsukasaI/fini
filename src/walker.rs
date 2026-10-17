@@ -182,7 +182,8 @@ fn rescue_tracked_files(
         }
 
         // Hidden paths are skipped unless --hidden: a tracked-and-gitignored
-        // file under .env or .github/workflows/ is exactly the #101 case.
+        // dotfile (.env) or file under a dotdir (.github/workflows/) is
+        // exactly the #101 case.
         if !include_hidden && has_hidden_component(&rel) {
             continue;
         }
@@ -226,6 +227,15 @@ fn rescue_tracked_files(
     }
 }
 
+/// Inherited git env vars that would redirect `git ls-files` away from the
+/// repo at `root`; the single list shared by production and the test helper.
+const GIT_ENV_TO_STRIP: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+];
+
 /// Lists files tracked by git under `root`, as paths relative to `root`.
 /// `git ls-files` ignores .gitignore entirely for already-tracked paths, so
 /// this surfaces exactly the set the ignore-respecting walk above may have
@@ -238,10 +248,11 @@ fn rescue_tracked_files(
 /// security-relevant fallback that must fail loud, not silently disable
 /// itself (see security.md).
 fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
-    let output = Command::new("git")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
+    let mut cmd = Command::new("git");
+    for var in GIT_ENV_TO_STRIP {
+        cmd.env_remove(var);
+    }
+    let output = cmd
         // A repo-local .git/config could otherwise run an arbitrary
         // core.fsmonitor hook, or ls-files could block on an index lock;
         // this call is a read-only supplement to the walk, not something
@@ -359,22 +370,8 @@ mod tests {
     use tempfile::TempDir;
 
     fn strip_git_env(cmd: &mut Command) {
-        for var in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-            "GIT_COMMON_DIR",
-            "GIT_NAMESPACE",
-            "GIT_PREFIX",
-        ] {
+        for var in GIT_ENV_TO_STRIP {
             cmd.env_remove(var);
-        }
-        for (var, _) in std::env::vars_os() {
-            if var.to_string_lossy().starts_with("GIT_") {
-                cmd.env_remove(var);
-            }
         }
     }
 
@@ -406,10 +403,11 @@ mod tests {
     #[test]
     fn test_issue_164_git_helper_strips_inherited_git_env() {
         let mut cmd = Command::new("git");
-        cmd.env("GIT_DIR", "/nonexistent/fini-bogus")
-            .env("GIT_INDEX_FILE", "/nonexistent/fini-bogus-index");
+        for var in GIT_ENV_TO_STRIP {
+            cmd.env(var, "/nonexistent/fini-bogus");
+        }
         strip_git_env(&mut cmd);
-        for var in ["GIT_DIR", "GIT_INDEX_FILE"] {
+        for var in GIT_ENV_TO_STRIP {
             let entry = cmd.get_envs().find(|(k, _)| *k == var).unwrap();
             assert_eq!(entry.1, None, "{var} must be removed, not passed through");
         }
@@ -418,12 +416,13 @@ mod tests {
         git_init(dir.path());
         fs::write(dir.path().join("a.txt"), "x\n").unwrap();
         git_in(dir.path(), ["add", "a.txt"]);
-        let out = git_command()
+        let out = cmd
             .arg("-C")
             .arg(dir.path())
             .args(["ls-files"])
             .output()
             .unwrap();
+        assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
     }
 
