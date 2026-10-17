@@ -1572,6 +1572,43 @@ fn test_skipped_files_counted_in_summary_without_verbose() {
     );
 }
 
+#[test]
+fn test_colored_summary_wraps_each_part_and_keeps_secrets_suffix_inside() {
+    // Integration tests run without a TTY, so colors are normally off and a
+    // misplaced reset (or the " (N secrets)" suffix landing after it) would
+    // pass every other test. Force colors and pin the exact escape layout.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("fixable.txt"), "hello   \n").unwrap();
+    fs::write(dir.path().join("binary.bin"), b"hello\x00world").unwrap();
+    // Otherwise clean, so only the fixable file counts as fixed.
+    fs::write(
+        dir.path().join("keys.txt"),
+        "password = \"supersecret123\" # fini:ignore secret\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .env_remove("NO_COLOR")
+        .arg("--color")
+        .arg("--no-progress")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "\x1b[32m1 files fixed\x1b[0m",
+        "\x1b[36m1 files skipped (see --verbose)\x1b[0m",
+        "\x1b[33m1 problems suppressed by fini:ignore (1 secrets)\x1b[0m",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing {expected:?} in summary: {stdout:?}"
+        );
+    }
+}
+
 // ===========================================
 // Atomic Writes & Symlinks (issue #35)
 // ===========================================
