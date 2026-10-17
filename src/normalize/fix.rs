@@ -17,20 +17,21 @@ pub(crate) fn normalize_line_endings(content: &str) -> String {
 }
 
 pub(super) fn fix_fullwidth_spaces(content: &str, line_map: &[usize]) -> (String, Vec<Problem>) {
-    let problems: Vec<Problem> = content
-        .lines()
-        .enumerate()
-        .flat_map(|(line_idx, line)| {
-            let count = line.chars().filter(|&c| c == FULLWIDTH_SPACE).count();
-            std::iter::repeat_n(
-                Problem {
-                    line: line_map[line_idx],
-                    kind: ProblemKind::FullWidthSpace,
-                },
-                count,
-            )
-        })
-        .collect();
+    let mut problems = vec![];
+    for (line_idx, line) in content.lines().enumerate() {
+        let count = line.chars().filter(|&c| c == FULLWIDTH_SPACE).count();
+        if count == 0 {
+            continue;
+        }
+        let line = line_map[line_idx];
+        problems.extend(std::iter::repeat_n(
+            Problem {
+                line,
+                kind: ProblemKind::FullWidthSpace,
+            },
+            count,
+        ));
+    }
 
     let result = content.replace(FULLWIDTH_SPACE, " ");
     (result, problems)
@@ -67,6 +68,16 @@ pub(crate) fn line_after_pre_trim_fixes(line: &str, remove_zero_width: bool) -> 
         line.to_string()
     };
     without_zero_width.replace(FULLWIDTH_SPACE, " ")
+}
+
+// Not `str::trim`: that strips all Unicode White_Space (form feed, NBSP,
+// U+2028, ...), but the other fixes only touch ' ', '\t' and U+3000, so such
+// lines would be deleted here while kept everywhere else. U+3000 stays in the
+// set: fullwidth conversion plus trailing-whitespace removal turns a
+// U+3000-only line into "", and excluding it breaks idempotency.
+fn is_blank_line(line: &str) -> bool {
+    line.chars()
+        .all(|c| matches!(c, ' ' | '\t' | FULLWIDTH_SPACE))
 }
 
 // Callers must re-attach the BOM via `reattach_bom`.
@@ -113,11 +124,10 @@ pub(super) fn remove_leading_blank_lines(
     let lines: Vec<&str> = body.lines().collect();
     let first_non_blank = lines
         .iter()
-        .position(|line| !line.trim().is_empty())
+        .position(|line| !is_blank_line(line))
         .unwrap_or(lines.len());
 
-    // With a BOM, the first body "line" is the rest of the BOM line, not a
-    // real blank line; reporting it would recur on every run.
+    // When only blanks follow a BOM, keep the BOM line: dropping it here would leave a BOM-only line that re-reports a leading blank on every run.
     if !bom.is_empty() && first_non_blank == lines.len() {
         return (content.to_string(), line_map.to_vec(), vec![]);
     }
@@ -154,19 +164,7 @@ pub(super) fn limit_consecutive_blank_lines(
     let mut blank_count = 0;
     let mut problem_start_line = 0;
 
-    // The trailing `None` flushes a run of blanks that reaches end of input.
-    let lines = content.lines().map(Some).chain(std::iter::once(None));
-    for (line_idx, line) in lines.enumerate() {
-        if let Some(blank) = line.filter(|l| l.trim().is_empty()) {
-            blank_count += 1;
-            if blank_count <= max {
-                result_lines.push(blank);
-                new_line_map.push(line_map[line_idx]);
-            } else if blank_count == max + 1 {
-                problem_start_line = line_map[line_idx];
-            }
-            continue;
-        }
+    let mut flush_run = |blank_count: usize, problem_start_line: usize| {
         if blank_count > max {
             problems.push(Problem {
                 line: problem_start_line,
@@ -176,12 +174,25 @@ pub(super) fn limit_consecutive_blank_lines(
                 },
             });
         }
-        blank_count = 0;
-        if let Some(line) = line {
-            result_lines.push(line);
-            new_line_map.push(line_map[line_idx]);
+    };
+
+    for (line_idx, line) in content.lines().enumerate() {
+        if is_blank_line(line) {
+            blank_count += 1;
+            if blank_count <= max {
+                result_lines.push(line);
+                new_line_map.push(line_map[line_idx]);
+            } else if blank_count == max + 1 {
+                problem_start_line = line_map[line_idx];
+            }
+            continue;
         }
+        flush_run(blank_count, problem_start_line);
+        blank_count = 0;
+        result_lines.push(line);
+        new_line_map.push(line_map[line_idx]);
     }
+    flush_run(blank_count, problem_start_line);
 
     (result_lines.join("\n"), new_line_map, problems)
 }
