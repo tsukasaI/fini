@@ -1402,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_false_positive_for_env_var() {
+    fn test_unquoted_env_var_reference_not_detected() {
         let input = "API_KEY = process.env.API_KEY\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         let problem = result

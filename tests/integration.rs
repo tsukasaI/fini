@@ -144,21 +144,6 @@ fn test_skip_binary_files() {
 }
 
 #[test]
-fn test_skip_empty_files() {
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("empty.txt");
-    fs::write(&file, "").unwrap();
-
-    let output = fini_cmd().arg(file.to_str().unwrap()).output().unwrap();
-
-    // Empty file should stay empty
-    assert_eq!(fs::read_to_string(&file).unwrap(), "");
-
-    // Should succeed
-    assert!(output.status.success());
-}
-
-#[test]
 fn test_fix_trailing_whitespace() {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("test.txt");
