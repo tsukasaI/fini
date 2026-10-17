@@ -1,10 +1,18 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
 fn fini_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_fini"))
+    // Not the inherited cwd: cargo runs tests from the package root, which is a git
+    // repo, so a developer's fini.toml there would leak into every test via the
+    // upward config search. An empty dir outside any repo has nothing to find.
+    static HERMETIC_CWD: OnceLock<TempDir> = OnceLock::new();
+    let cwd = HERMETIC_CWD.get_or_init(|| TempDir::new().unwrap());
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_fini"));
+    cmd.current_dir(cwd.path());
+    cmd
 }
 
 // ===========================================
