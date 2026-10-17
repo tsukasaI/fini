@@ -74,14 +74,15 @@ pub fn find_file_upward(
     None
 }
 
-// Any `.git` entry counts: a directory (even an empty one) or the file a
-// worktree/submodule uses. The walk above stops at the same marker, so this
+// Any existing `.git` entry counts (`Path::exists`, symlinks followed): a
+// directory (even an empty one) or the file a worktree/submodule uses. The walk above stops at the same marker, so this
 // must agree with it.
 //
 // Deliberately not unified with walker::has_real_git_repo, which answers a
 // different question (should a git failure warn?): it canonicalizes `root` and
 // requires `.git/HEAD` (or a `.git` file), so an empty `.git` directory
-// doesn't count there, whereas config discovery must stop at it.
+// doesn't count there (e.g. a test fixture's empty `.git`), whereas config
+// discovery must stop at it.
 fn has_git_marker(start_dir: &Path) -> bool {
     start_dir.ancestors().any(|dir| dir.join(".git").exists())
 }

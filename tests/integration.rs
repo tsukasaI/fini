@@ -3392,3 +3392,63 @@ fn test_fix_diff_masked_collapse_without_problems_still_names_file() {
         "the raw secret value must never reach --diff output: {stdout:?}"
     );
 }
+
+// ===========================================
+// Inherited git env vs. tracked-file rescue (issue #225)
+// ===========================================
+
+fn clean_git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// issue #225: the strip in the production `git ls-files` call must hold when
+// fini itself inherits redirecting GIT_* vars (e.g. when run from a git
+// hook). Exercises the real path end-to-end, unlike the walker unit test.
+#[test]
+fn test_issue_225_tracked_gitignored_rescue_survives_inherited_git_env() {
+    let dir = TempDir::new().unwrap();
+    clean_git(dir.path(), &["init", "-q"]);
+    fs::write(dir.path().join("ignored.txt"), "// TODO: rescued\n").unwrap();
+    clean_git(dir.path(), &["add", "ignored.txt"]);
+    fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
+
+    let bogus = dir.path().join("nonexistent-git-env");
+    let output = fini_cmd()
+        .env("GIT_DIR", &bogus)
+        .env("GIT_WORK_TREE", &bogus)
+        .env("GIT_INDEX_FILE", &bogus)
+        .env("GIT_COMMON_DIR", &bogus)
+        .env("GIT_OBJECT_DIRECTORY", &bogus)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &bogus)
+        .arg("--check")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("git ls-files") && !stderr.contains("could not run git"),
+        "git failure warning leaked: {stderr:?}"
+    );
+    assert!(
+        stdout.contains("ignored.txt") && stdout.contains("TODO"),
+        "tracked-but-gitignored TODO not reported: {stdout:?} {stderr:?}"
+    );
+}

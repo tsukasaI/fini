@@ -87,6 +87,9 @@ const SECRET_SKIP_PATTERNS: &[&str] = &[
 fn is_valid_marker(line: &str, marker: &str) -> bool {
     let bytes = line.as_bytes();
     let m = marker.as_bytes();
+    debug_assert!(!m.is_empty(), "markers are non-empty constants");
+    // Kept in release builds too: `windows(0)` panics, and an empty marker
+    // must not match every line.
     if m.is_empty() {
         return false;
     }

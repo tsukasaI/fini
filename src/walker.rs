@@ -228,13 +228,29 @@ fn rescue_tracked_files(
 }
 
 /// Inherited git env vars that would redirect `git ls-files` away from the
-/// repo at `root`; the single list shared by production and the test helper.
-const GIT_ENV_TO_STRIP: [&str; 4] = [
+/// repo at `root` (repo, work tree, index, or object store); the single list
+/// shared by production and the test helper.
+///
+/// `GIT_CEILING_DIRECTORIES` is deliberately absent: it only bounds upward
+/// repo discovery (an explicit boundary the user chose) and never redirects
+/// git to a different repo, so stripping it would widen discovery.
+const GIT_ENV_TO_STRIP: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
     "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 ];
+
+/// Removes inherited git env vars (see `GIT_ENV_TO_STRIP`) from `cmd` so git
+/// resolves the repo from its `-C` directory instead of the caller's
+/// environment (e.g. when fini runs inside a git hook).
+fn strip_inherited_git_env(cmd: &mut Command) {
+    for var in GIT_ENV_TO_STRIP {
+        cmd.env_remove(var);
+    }
+}
 
 /// Lists files tracked by git under `root`, as paths relative to `root`.
 /// `git ls-files` ignores .gitignore entirely for already-tracked paths, so
@@ -249,9 +265,7 @@ const GIT_ENV_TO_STRIP: [&str; 4] = [
 /// itself (see security.md).
 fn git_tracked_files_relative(root: &Path) -> Vec<PathBuf> {
     let mut cmd = Command::new("git");
-    for var in GIT_ENV_TO_STRIP {
-        cmd.env_remove(var);
-    }
+    strip_inherited_git_env(&mut cmd);
     let output = cmd
         // A repo-local .git/config could otherwise run an arbitrary
         // core.fsmonitor hook, or ls-files could block on an index lock;
@@ -309,6 +323,8 @@ fn is_plain_relative_path(rel: &Path) -> bool {
 /// itself being available to answer that question.
 ///
 /// Not unified with config::file::has_git_marker; see the comment there.
+/// An empty `.git` directory (e.g. a test fixture's) must not count: git
+/// itself fails there, and warning about that would be noise.
 fn has_real_git_repo(root: &Path) -> bool {
     let Ok(root) = root.canonicalize() else {
         return false;
@@ -369,15 +385,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn strip_git_env(cmd: &mut Command) {
-        for var in GIT_ENV_TO_STRIP {
-            cmd.env_remove(var);
-        }
-    }
-
     fn git_command() -> Command {
         let mut cmd = Command::new("git");
-        strip_git_env(&mut cmd);
+        strip_inherited_git_env(&mut cmd);
         cmd
     }
 
@@ -400,14 +410,24 @@ mod tests {
             .success());
     }
 
+    // Literal list on purpose (not GIT_ENV_TO_STRIP): deriving the expectations
+    // from the constant would stay green if a var were dropped from it.
     #[test]
     fn test_issue_164_git_helper_strips_inherited_git_env() {
+        let must_strip = [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ];
         let mut cmd = Command::new("git");
-        for var in GIT_ENV_TO_STRIP {
+        for var in must_strip {
             cmd.env(var, "/nonexistent/fini-bogus");
         }
-        strip_git_env(&mut cmd);
-        for var in GIT_ENV_TO_STRIP {
+        strip_inherited_git_env(&mut cmd);
+        for var in must_strip {
             let entry = cmd.get_envs().find(|(k, _)| *k == var).unwrap();
             assert_eq!(entry.1, None, "{var} must be removed, not passed through");
         }
@@ -422,7 +442,11 @@ mod tests {
             .args(["ls-files"])
             .output()
             .unwrap();
-        assert!(out.status.success());
+        assert!(
+            out.status.success(),
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
     }
 
