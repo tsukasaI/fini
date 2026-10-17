@@ -146,12 +146,14 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     let mut line_map: Vec<usize> = (1..=result.lines().count()).collect();
 
     if config.remove_zero_width {
+        debug_assert!(line_map.len() >= result.lines().count());
         let (fixed, zw_problems) = remove_zero_width_chars(&result, &line_map);
         result = fixed;
         problems.extend(zw_problems);
     }
 
     if config.fix_code_blocks {
+        debug_assert!(line_map.len() >= result.lines().count());
         let (fixed, new_line_map, code_block_problems) =
             remove_code_block_remnants(&result, &line_map);
         result = fixed;
@@ -160,6 +162,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     }
 
     if config.remove_leading_blanks {
+        debug_assert!(line_map.len() >= result.lines().count());
         let (fixed, new_line_map, leading_problems) =
             remove_leading_blank_lines(&result, &line_map);
         result = fixed;
@@ -168,6 +171,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     }
 
     if let Some(max) = config.max_blank_lines {
+        debug_assert!(line_map.len() >= result.lines().count());
         let (fixed, new_line_map, blank_problems) =
             limit_consecutive_blank_lines(&result, max, &line_map);
         result = fixed;
@@ -175,6 +179,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         problems.extend(blank_problems);
     }
 
+    debug_assert!(line_map.len() >= result.lines().count());
     let (fixed, fullwidth_problems) = fix_fullwidth_spaces(&result, &line_map);
     result = fixed;
     problems.extend(fullwidth_problems);
@@ -871,6 +876,41 @@ mod tests {
         let input = "hello\n\n\n\n";
         let result = normalize_content(input, &config);
         assert_eq!(result.content, "hello\n");
+    }
+
+    #[test]
+    fn test_form_feed_and_nbsp_lines_are_not_blank() {
+        let config = NormalizeConfig {
+            max_blank_lines: Some(1),
+            ..NormalizeConfig::default()
+        };
+        for ch in ['\u{0c}', '\u{a0}', '\u{2028}', '\u{85}'] {
+            let leading = format!("{ch}\nfoo\n");
+            assert_eq!(normalize_content(&leading, &config).content, leading);
+            let run = format!("a\n{ch}\n{ch}\n{ch}\nb\n");
+            let result = normalize_content(&run, &config);
+            assert_eq!(result.content, run);
+            assert!(result.problems.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_fullwidth_only_lines_still_blank_and_idempotent() {
+        let config = NormalizeConfig {
+            max_blank_lines: Some(1),
+            ..NormalizeConfig::default()
+        };
+        let input = "\u{3000}\n\u{3000}\na\n\u{3000}\n\u{3000}\n\u{3000}\nb\n";
+        let once = normalize_content(input, &config).content;
+        assert_eq!(once, "a\n\nb\n");
+        assert_eq!(normalize_content(&once, &config).content, once);
+    }
+
+    #[test]
+    fn test_fix_fullwidth_spaces_short_line_map_without_fullwidth_does_not_panic() {
+        let (result, problems) = fix::fix_fullwidth_spaces("a\nb\nc\n", &[]);
+        assert_eq!(result, "a\nb\nc\n");
+        assert!(problems.is_empty());
     }
 
     #[test]

@@ -1597,6 +1597,26 @@ fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
 }
 
 #[test]
+fn test_stdin_keeps_form_feed_and_nbsp_only_lines() {
+    let out = run_stdin(&[], b"\x0c\nfoo\n");
+    assert_eq!(out.stdout, b"\x0c\nfoo\n");
+
+    let out = run_stdin(&[], "\u{a0}\nfoo\n".as_bytes());
+    assert_eq!(out.stdout, "\u{a0}\nfoo\n".as_bytes());
+
+    let out = run_stdin(&["--max-blank-lines", "1"], b"a\n\x0c\n\x0c\n\x0c\nb\n");
+    assert_eq!(out.stdout, b"a\n\x0c\n\x0c\n\x0c\nb\n");
+}
+
+#[test]
+fn test_stdin_fullwidth_only_leading_line_removed_idempotently() {
+    let first = run_stdin(&[], "\u{3000}\nfoo\n".as_bytes());
+    assert_eq!(first.stdout, b"foo\n");
+    let second = run_stdin(&[], &first.stdout);
+    assert_eq!(second.stdout, first.stdout);
+}
+
+#[test]
 fn test_stdin_oversize_input_exits_2_without_output() {
     let output = run_stdin(&["--max-file-size", "16"], &[b'a'; 100_000]);
     assert_eq!(output.status.code(), Some(2));
