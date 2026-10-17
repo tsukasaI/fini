@@ -6,19 +6,19 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-/// Walk paths and yield file paths, respecting gitignore and custom exclude patterns.
+/// Walk paths and return file paths, respecting gitignore and custom exclude patterns.
 ///
 /// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js").
 ///
 /// Returns `Err` immediately for fatal configuration errors (e.g. an invalid exclude
 /// pattern) so callers can fail closed instead of silently walking with no excludes.
 /// Once walking starts, per-entry errors (e.g. permission-denied on a subdirectory)
-/// are yielded as `Err` items in the iterator rather than aborting the whole walk.
+/// are returned as `Err` elements rather than aborting the whole walk.
 pub fn walk_paths(
     paths: &[String],
     exclude_patterns: &[String],
     include_hidden: bool,
-) -> io::Result<impl Iterator<Item = io::Result<PathBuf>>> {
+) -> io::Result<Vec<io::Result<PathBuf>>> {
     let mut all_files = vec![];
     // Overlapping path arguments (e.g. `fini src src/a.rs`) can walk the same
     // file more than once; dedup so it's only ever processed once (issue
@@ -149,7 +149,7 @@ pub fn walk_paths(
         }
     }
 
-    Ok(all_files.into_iter())
+    Ok(all_files)
 }
 
 /// Mirrors `builder.hidden(!include_hidden)`: any dotfile/dotdir component.
@@ -441,7 +441,7 @@ mod tests {
         fs::write(&file_path, "hello").unwrap();
 
         let paths = vec![file_path.to_string_lossy().to_string()];
-        let files: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
+        let files: Vec<_> = walk_paths(&paths, &[], false).unwrap();
 
         assert_eq!(files.len(), 1);
         assert!(files[0].is_ok());
@@ -457,6 +457,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -472,6 +473,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -491,6 +493,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], true)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -519,6 +522,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], true)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -547,6 +551,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], true)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -580,6 +585,7 @@ mod tests {
 
         let without_hidden: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
         assert!(
@@ -591,6 +597,7 @@ mod tests {
 
         let with_hidden: Vec<_> = walk_paths(&paths, &[], true)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
         assert!(
@@ -611,6 +618,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -630,6 +638,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -664,6 +673,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -690,6 +700,7 @@ mod tests {
         let exclude = vec!["*.min.js".to_string(), "vendor/".to_string()];
         let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -708,6 +719,7 @@ mod tests {
         let exclude = vec!["node_modules/".to_string()];
         let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -730,6 +742,7 @@ mod tests {
         ];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -757,6 +770,7 @@ mod tests {
         ];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -788,6 +802,7 @@ mod tests {
         ];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -815,7 +830,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
 
         let paths = vec![link.to_string_lossy().to_string()];
-        let results: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
+        let results: Vec<_> = walk_paths(&paths, &[], false).unwrap();
 
         assert!(
             results.iter().all(|r| r.is_err()),
@@ -835,7 +850,7 @@ mod tests {
         for suffix in ["/", "//", "/."] {
             let path_with_suffix = format!("{}{suffix}", link.to_string_lossy());
             let paths = vec![path_with_suffix.clone()];
-            let results: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
+            let results: Vec<_> = walk_paths(&paths, &[], false).unwrap();
             assert!(
                 results.iter().all(|r| r.is_err()),
                 "{path_with_suffix:?} must also be refused, not walked: {results:?}"
@@ -858,7 +873,7 @@ mod tests {
         let exclude = vec!["[invalid".to_string()];
         let result = walk_paths(&paths, &exclude, false);
 
-        let err = result.err().expect("invalid glob pattern should error");
+        let err = result.expect_err("invalid glob pattern should error");
         assert!(err.to_string().contains("invalid exclude pattern"));
     }
 
@@ -879,7 +894,7 @@ mod tests {
         fs::set_permissions(&blocked_dir, perms.clone()).unwrap();
 
         let paths = vec![dir.path().to_string_lossy().to_string()];
-        let entries: Vec<_> = walk_paths(&paths, &[], false).unwrap().collect();
+        let entries: Vec<_> = walk_paths(&paths, &[], false).unwrap();
 
         // Restore permissions so TempDir cleanup can remove the directory.
         perms.set_mode(0o755);
@@ -918,6 +933,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -939,6 +955,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -963,6 +980,7 @@ mod tests {
         let exclude = vec!["tracked.env".to_string()];
         let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -986,6 +1004,7 @@ mod tests {
         let exclude = vec!["vendor/".to_string()];
         let files: Vec<_> = walk_paths(&paths, &exclude, false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -1015,6 +1034,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -1042,6 +1062,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 
@@ -1080,6 +1101,7 @@ mod tests {
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let files: Vec<_> = walk_paths(&paths, &[], false)
             .unwrap()
+            .into_iter()
             .filter_map(|r| r.ok())
             .collect();
 

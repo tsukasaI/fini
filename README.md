@@ -270,7 +270,7 @@ never fails on detection-only problems (TODOs, debug code, secrets) — always u
 |------|---------|
 | 0 | Success (no problems / fix completed) |
 | 1 | Problems found (`--check`) |
-| 2 | Runtime error (I/O failure, invalid config or exclude pattern) |
+| 2 | Runtime error (I/O failure, invalid config or exclude pattern; also `--stdin` input that would be skipped: oversize, binary, UTF-16, or non-UTF-8) |
 
 Fix mode (without `--check`) exits 0 even when detection-only problems
 (TODOs, debug code, secrets) are reported — they are informational there.

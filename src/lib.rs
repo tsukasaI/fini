@@ -1,27 +1,25 @@
-pub mod colors;
-pub mod config;
-pub mod normalize;
+mod colors;
+mod config;
+mod normalize;
 mod output;
-pub mod progress;
-pub mod walker;
+mod progress;
+mod walker;
 
 pub use colors::{should_use_colors, Colors};
 pub use config::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
     load_config, merge_exclude_patterns, merge_normalize_config, parse_editorconfig,
-    CliNormalizeOptions, ConfigError, FiniToml, NormalizeSection, FINI_TOML_TEMPLATE,
+    CliNormalizeOptions, FiniToml,
 };
-pub use normalize::{
-    mask_secret_lines, normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind,
-    FIX_KIND_IGNORE_HINT,
-};
+pub use normalize::{normalize_content, NormalizeConfig, FIX_KIND_IGNORE_HINT};
 pub use output::{
-    escape_line_breaks, print_change_summary_to, print_check_report_to, print_diff, print_diff_to,
-    print_problems_to, safe_path_display, warn_suppressed_secrets, Config, OutputContext,
-    OutputMode, RunResult,
+    escape_line_breaks, print_check_report_to, safe_path_display, warn_suppressed_secrets, Config,
+    OutputContext, OutputMode,
 };
-pub use progress::ProgressReporter;
-pub use walker::walk_paths;
+
+use normalize::{NormalizeResult, Problem, ProblemKind};
+use output::RunResult;
+use walker::walk_paths;
 
 use rayon::prelude::*;
 use std::fs::{self, File};
@@ -60,6 +58,7 @@ pub enum SkipReason {
 }
 
 impl SkipReason {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Empty => "empty",
@@ -73,6 +72,7 @@ impl SkipReason {
 
     /// Empty files are trivially "done"; every other skip means "this file
     /// was not inspected".
+    #[must_use]
     pub fn counts_as_skipped(self) -> bool {
         !matches!(self, Self::Empty)
     }
@@ -140,7 +140,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     }
 
     let mut fix_kind_hint_due = false;
-    let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
+    let bar = progress::progress_bar(file_paths.len() as u64, ctx.show_progress);
 
     // Process files in fixed-size chunks: within a chunk, read+normalize run in
     // parallel and are collected (rayon's par_iter().collect() over a slice
@@ -153,7 +153,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
             .par_iter()
             .map(|path| {
                 let outcome = process_file(path, &config.normalize);
-                progress.inc();
+                bar.inc(1);
                 (path.as_path(), outcome)
             })
             .collect();
@@ -170,7 +170,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         }
     }
 
-    progress.finish();
+    bar.finish_and_clear();
 
     // Advisory only, so --quiet silences it (unlike the secret-suppression
     // audit trail, which is security-relevant and always printed).

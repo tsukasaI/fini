@@ -14,7 +14,7 @@ mod merge;
 mod toml_schema;
 
 pub use editorconfig::{check_editorconfig_conflicts, find_editorconfig, parse_editorconfig};
-pub use file::{find_config_file, find_file_upward, load_config, ConfigError};
-pub use init::{generate_init_file, FINI_TOML_TEMPLATE};
+pub use file::{find_config_file, load_config};
+pub use init::generate_init_file;
 pub use merge::{merge_exclude_patterns, merge_normalize_config, CliNormalizeOptions};
-pub use toml_schema::{FiniToml, NormalizeSection};
+pub use toml_schema::FiniToml;

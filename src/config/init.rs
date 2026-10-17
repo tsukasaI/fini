@@ -73,11 +73,11 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # max_file_size = 10485760
 "#;
 
-/// Generate fini.toml in the specified directory (or current directory if None).
+/// Generate fini.toml in `dir` (an empty path means the current directory).
 ///
 /// Returns an error if fini.toml already exists.
-pub fn generate_init_file_in(dir: Option<&Path>) -> io::Result<PathBuf> {
-    let path = dir.map_or_else(|| PathBuf::from("fini.toml"), |d| d.join("fini.toml"));
+pub fn generate_init_file(dir: &Path) -> io::Result<PathBuf> {
+    let path = dir.join("fini.toml");
 
     if path.exists() {
         return Err(io::Error::new(
@@ -90,13 +90,6 @@ pub fn generate_init_file_in(dir: Option<&Path>) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-/// Generate fini.toml in the current directory.
-///
-/// Returns an error if fini.toml already exists.
-pub fn generate_init_file() -> io::Result<PathBuf> {
-    generate_init_file_in(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,7 +99,7 @@ mod tests {
     fn test_generate_init_file_creates_file() {
         let dir = TempDir::new().unwrap();
 
-        let result = generate_init_file_in(Some(dir.path()));
+        let result = generate_init_file(dir.path());
         assert!(result.is_ok());
 
         let path = result.unwrap();
@@ -125,7 +118,7 @@ mod tests {
 
         fs::write(&config_path, "existing").unwrap();
 
-        let result = generate_init_file_in(Some(dir.path()));
+        let result = generate_init_file(dir.path());
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
     }

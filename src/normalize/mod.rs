@@ -2,8 +2,6 @@ mod detect;
 mod fix;
 mod ignore;
 
-use serde::{Deserialize, Serialize};
-
 use detect::{
     check_line_length, detect_debug_code, detect_secret_patterns, detect_todo_and_fixme_comments,
 };
@@ -15,7 +13,7 @@ use fix::{
 
 pub(crate) use fix::{line_after_pre_trim_fixes, normalize_line_endings, trim_trailing_ws};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NormalizeConfig {
     /// None = no limit
     pub max_blank_lines: Option<usize>,

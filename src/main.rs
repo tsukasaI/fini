@@ -1,5 +1,5 @@
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -197,10 +197,9 @@ fn main() -> ExitCode {
     };
 
     let use_colors = should_use_colors(cli.color, cli.no_color);
-    let verbose = cli.verbose && !cli.quiet;
     let show_progress = !cli.quiet && !cli.no_progress && std::io::stdout().is_terminal();
 
-    let ctx = OutputContext::new(output_mode, use_colors, verbose, show_progress);
+    let ctx = OutputContext::new(output_mode, use_colors, cli.verbose, show_progress);
 
     match run(&cli.paths, &config, &ctx) {
         Ok(result) => {
@@ -221,7 +220,7 @@ fn main() -> ExitCode {
 }
 
 fn handle_init() -> ExitCode {
-    match generate_init_file() {
+    match generate_init_file(Path::new("")) {
         Ok(path) => {
             println!("Created {}", safe_path_display(&path));
             ExitCode::SUCCESS
