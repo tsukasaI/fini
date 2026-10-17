@@ -292,23 +292,17 @@ fn is_plain_relative_path(rel: &Path) -> bool {
     rel.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
-/// Filesystem-only check for a `.git` entry (directory, or the file a
+/// Filesystem-only check for a git repo (`.git/HEAD`, or the `.git` file a
 /// worktree/submodule uses) in `root` or any ancestor — used to decide
 /// whether a git failure deserves a warning, without depending on git
 /// itself being available to answer that question.
 ///
-/// Not unified with config::file::has_git_marker, which accepts a bare
-/// `.git` entry because config discovery stops at that marker; here an
-/// empty `.git` must not trigger a warning.
+/// Not unified with config::file::has_git_marker; see the comment there.
 fn has_real_git_repo(root: &Path) -> bool {
     let Ok(root) = root.canonicalize() else {
         return false;
     };
     root.ancestors().any(|dir| {
-        // An empty `.git` directory (as a test fixture might create without
-        // actually running `git init`) isn't a real repo either; check for
-        // HEAD (present for both a normal repo and a worktree's `.git` file
-        // pointing elsewhere) rather than bare existence.
         let git_entry = dir.join(".git");
         git_entry.join("HEAD").exists() || git_entry.is_file()
     })

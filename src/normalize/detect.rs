@@ -86,19 +86,17 @@ const SECRET_SKIP_PATTERNS: &[&str] = &[
 /// Case-insensitive ASCII marker search without allocating an uppercase copy.
 fn is_valid_marker(line: &str, marker: &str) -> bool {
     let bytes = line.as_bytes();
-    let mlen = marker.len();
-    for i in 0..bytes.len().saturating_sub(mlen - 1) {
-        if bytes[i..i + mlen].eq_ignore_ascii_case(marker.as_bytes()) {
-            let after = bytes.get(i + mlen).copied();
-            if matches!(
-                after,
-                Some(b':') | Some(b' ') | Some(b'\t') | Some(b'(') | None
-            ) {
-                return true;
-            }
-        }
+    let m = marker.as_bytes();
+    if m.is_empty() {
+        return false;
     }
-    false
+    bytes.windows(m.len()).enumerate().any(|(i, w)| {
+        w.eq_ignore_ascii_case(m)
+            && matches!(
+                bytes.get(i + m.len()),
+                Some(b':' | b' ' | b'\t' | b'(') | None
+            )
+    })
 }
 
 /// Detects TODO and FIXME markers in a single pass over `content`'s lines
@@ -141,19 +139,17 @@ pub(super) fn detect_todo_and_fixme_comments(
 /// `eprintln!(` (offset 1) doesn't count.
 fn contains_word_boundary(line: &str, pattern: &str) -> bool {
     let bytes = line.as_bytes();
-    let plen = pattern.len();
-    if plen == 0 {
+    let p = pattern.as_bytes();
+    if p.is_empty() {
         return false;
     }
-    for i in 0..bytes.len().saturating_sub(plen - 1) {
-        if bytes[i..i + plen] == *pattern.as_bytes() {
-            let before = if i == 0 { None } else { Some(bytes[i - 1]) };
-            if !matches!(before, Some(b) if b.is_ascii_alphanumeric() || b == b'_') {
-                return true;
-            }
-        }
-    }
-    false
+    bytes.windows(p.len()).enumerate().any(|(i, w)| {
+        w == p
+            && !matches!(
+                i.checked_sub(1).map(|j| bytes[j]),
+                Some(b) if b.is_ascii_alphanumeric() || b == b'_'
+            )
+    })
 }
 
 pub(super) fn detect_debug_code(

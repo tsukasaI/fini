@@ -61,37 +61,29 @@ pub fn find_file_upward(
         return file_path.exists().then_some(file_path);
     }
 
-    let mut current = start_dir.to_path_buf();
-
-    loop {
-        let file_path = current.join(filename);
+    for dir in start_dir.ancestors() {
+        let file_path = dir.join(filename);
         if file_path.exists() {
             return Some(file_path);
         }
 
-        if stop_at_git_root && current.join(".git").exists() {
-            return None;
-        }
-
-        if !current.pop() {
+        if stop_at_git_root && dir.join(".git").exists() {
             return None;
         }
     }
+    None
 }
 
-// Any `.git` entry counts, even an empty directory: the walk above stops at
-// the same marker, so this must agree with it. Not unified with
-// walker::has_real_git_repo, which requires HEAD and canonicalizes.
+// Any `.git` entry counts: a directory (even an empty one) or the file a
+// worktree/submodule uses. The walk above stops at the same marker, so this
+// must agree with it.
+//
+// Deliberately not unified with walker::has_real_git_repo, which answers a
+// different question (should a git failure warn?): it canonicalizes `root` and
+// requires `.git/HEAD` (or a `.git` file), so an empty `.git` directory
+// doesn't count there, whereas config discovery must stop at it.
 fn has_git_marker(start_dir: &Path) -> bool {
-    let mut current = start_dir.to_path_buf();
-    loop {
-        if current.join(".git").exists() {
-            return true;
-        }
-        if !current.pop() {
-            return false;
-        }
-    }
+    start_dir.ancestors().any(|dir| dir.join(".git").exists())
 }
 
 /// Find fini.toml by searching upward from the given directory.
