@@ -451,15 +451,14 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
         return;
     }
 
+    let colored = |color: &str, text: String| format!("{color}{text}{}", ctx.colors.reset());
     let mut parts = vec![];
 
     if config.check_only {
         if result.files_with_problems > 0 {
-            parts.push(format!(
-                "{}{} files with problems{}",
+            parts.push(colored(
                 ctx.colors.error,
-                result.files_with_problems,
-                ctx.colors.reset()
+                format!("{} files with problems", result.files_with_problems),
             ));
         }
     } else {
@@ -471,38 +470,29 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
             } else {
                 "files would be fixed"
             };
-            parts.push(format!(
-                "{}{} {}{}",
+            parts.push(colored(
                 ctx.colors.success,
-                result.files_fixed,
-                label,
-                ctx.colors.reset()
+                format!("{} {}", result.files_fixed, label),
             ));
         }
         if result.warnings > 0 {
-            parts.push(format!(
-                "{}{} warnings{}",
+            parts.push(colored(
                 ctx.colors.warning,
-                result.warnings,
-                ctx.colors.reset()
+                format!("{} warnings", result.warnings),
             ));
         }
     }
 
     if result.errors > 0 {
-        parts.push(format!(
-            "{}{} errors{}",
+        parts.push(colored(
             ctx.colors.error,
-            result.errors,
-            ctx.colors.reset()
+            format!("{} errors", result.errors),
         ));
     }
     if result.skipped > 0 {
-        parts.push(format!(
-            "{}{} files skipped (see --verbose){}",
+        parts.push(colored(
             ctx.colors.info,
-            result.skipped,
-            ctx.colors.reset()
+            format!("{} files skipped (see --verbose)", result.skipped),
         ));
     }
     if result.suppressed > 0 {
@@ -511,12 +501,12 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
         } else {
             String::new()
         };
-        parts.push(format!(
-            "{}{} problems suppressed by fini:ignore{}{}",
+        parts.push(colored(
             ctx.colors.warning,
-            result.suppressed,
-            secrets,
-            ctx.colors.reset()
+            format!(
+                "{} problems suppressed by fini:ignore{}",
+                result.suppressed, secrets
+            ),
         ));
     }
 
