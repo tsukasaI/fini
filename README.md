@@ -1,7 +1,6 @@
 # fini
 
 [![CI](https://github.com/tsukasaI/fini/actions/workflows/ci.yaml/badge.svg)](https://github.com/tsukasaI/fini/actions/workflows/ci.yaml)
-[![Crates.io](https://img.shields.io/crates/v/fini.svg)](https://crates.io/crates/fini)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A lightweight file normalization CLI tool for AI coding agents.
@@ -10,9 +9,9 @@ Standardizes file formatting as a finishing step after code editing.
 
 ## Installation
 
-### Cargo
+### Cargo (from source)
 ```bash
-cargo install fini
+cargo install --git https://github.com/tsukasaI/fini
 ```
 
 ### Nix
@@ -44,7 +43,7 @@ repos:
       - id: fini-check  # Check-only mode (for CI)
 ```
 
-Note: Requires fini to be installed (`cargo install fini` or via Homebrew/Nix).
+Note: Requires fini to be installed (`cargo install --git https://github.com/tsukasaI/fini`, or via Homebrew/Nix).
 
 ## Usage
 
@@ -159,7 +158,9 @@ API_KEY = "sk_test_example"
 
 Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`
 
-Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading blank lines, consecutive blank lines, code block remnants) are never suppressed, since the content changes regardless. Unrecognized or fix-type kinds have no effect; a directive naming only fix-type kinds (e.g. `fini:ignore fullwidth`) prints a one-time stderr hint per run (not with `--quiet`).
+Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading blank lines, consecutive blank lines, code block remnants) are never suppressed, since the content changes regardless. Unrecognized or fix-type kinds have no effect; a directive naming only fix-type kinds (e.g. `fini:ignore fullwidth`) prints a one-time stderr hint per run, naming the first such file and how many more (not with `--quiet`). The hint only fires for files where fini finds at least one problem, because directives are not parsed in otherwise clean files.
+
+If a line contains several directives, the first `fini:ignore` on it decides: a later `fini:ignore-next-line` on the same line is read as part of that first directive's kind list, not as its own directive. For example, `// TODO x fini:ignore fini:ignore-next-line` does not suppress the following line.
 
 Everything on a line from `fini:ignore`/`fini:ignore-next-line` onward is
 directive syntax, not code, so it's never scanned for TODO/FIXME markers or

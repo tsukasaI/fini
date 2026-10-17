@@ -64,10 +64,10 @@ impl Config {
 }
 
 pub struct OutputContext {
-    pub mode: OutputMode,
-    pub colors: Colors,
-    pub verbose: bool,
-    pub show_progress: bool,
+    pub(crate) mode: OutputMode,
+    pub(crate) colors: Colors,
+    pub(crate) verbose: bool,
+    pub(crate) show_progress: bool,
 }
 
 impl OutputContext {

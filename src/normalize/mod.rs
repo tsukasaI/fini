@@ -105,7 +105,8 @@ pub enum ProblemKind {
 }
 
 /// Identifiers of fix-type kinds, which `fini:ignore` accepts syntactically
-/// but can never act on (see `ProblemKind::ignore_id`).
+/// but can never act on (see `ProblemKind::fix_id`, which a test keeps in
+/// sync with this list).
 const FIX_KIND_IDS: [&str; 5] = [
     "fullwidth",
     "leading-blanks",
@@ -121,7 +122,7 @@ pub(crate) fn is_fix_kind_id(id: &str) -> bool {
 
 /// One-time stderr hint for a `fini:ignore` directive that names only fix
 /// kinds, which silently has no effect otherwise.
-pub const FIX_KIND_IGNORE_HINT: &str = "Hint: fini:ignore only suppresses detections (todo, fixme, debug, secret, line-length); fix kinds like 'fullwidth' are always applied";
+pub const FIX_KIND_IGNORE_HINT: &str = "Hint: fini:ignore only suppresses detections (todo, fixme, debug, secret, line-length); fix kinds like 'fullwidth' cannot be suppressed";
 
 /// `1..=n` over the lines of `content`: the line map before any fix has
 /// dropped or moved a line.
@@ -130,8 +131,38 @@ pub(super) fn identity_line_map(content: &str) -> Vec<usize> {
 }
 
 impl ProblemKind {
+    /// Drives exit codes (`has_detection_problems`), so it has its own
+    /// exhaustive match instead of deriving from `ignore_id`.
     pub fn is_detection_only(&self) -> bool {
-        self.ignore_id().is_some()
+        match self {
+            ProblemKind::TodoComment
+            | ProblemKind::FixmeComment
+            | ProblemKind::DebugCode { .. }
+            | ProblemKind::SecretPattern { .. }
+            | ProblemKind::LongLine { .. } => true,
+            ProblemKind::FullWidthSpace
+            | ProblemKind::LeadingBlankLines { .. }
+            | ProblemKind::ZeroWidthCharacter
+            | ProblemKind::ExcessiveBlankLines { .. }
+            | ProblemKind::CodeBlockRemnant => false,
+        }
+    }
+
+    /// Directive-syntax identifier of a fix kind; `None` for detections.
+    /// Exhaustive so a new variant forces a decision here.
+    pub fn fix_id(&self) -> Option<&'static str> {
+        match self {
+            ProblemKind::FullWidthSpace => Some("fullwidth"),
+            ProblemKind::LeadingBlankLines { .. } => Some("leading-blanks"),
+            ProblemKind::ZeroWidthCharacter => Some("zero-width"),
+            ProblemKind::ExcessiveBlankLines { .. } => Some("blank-lines"),
+            ProblemKind::CodeBlockRemnant => Some("code-block"),
+            ProblemKind::TodoComment
+            | ProblemKind::FixmeComment
+            | ProblemKind::DebugCode { .. }
+            | ProblemKind::SecretPattern { .. }
+            | ProblemKind::LongLine { .. } => None,
+        }
     }
 
     /// Identifier used in `fini:ignore` directives; `None` for fix kinds,
@@ -269,41 +300,74 @@ pub fn mask_secret_lines(content: &str) -> String {
 mod tests {
     use super::*;
 
-    const ALL_KINDS: [ProblemKind; 10] = [
-        ProblemKind::FullWidthSpace,
-        ProblemKind::LeadingBlankLines { count: 1 },
-        ProblemKind::ZeroWidthCharacter,
-        ProblemKind::ExcessiveBlankLines { found: 3, limit: 2 },
-        ProblemKind::CodeBlockRemnant,
-        ProblemKind::TodoComment,
-        ProblemKind::FixmeComment,
-        ProblemKind::DebugCode { pattern: "print(" },
-        ProblemKind::SecretPattern { hint: "key" },
-        ProblemKind::LongLine {
-            length: 100,
-            limit: 80,
-        },
-    ];
+    /// Every variant, walked through a no-wildcard match: adding a variant
+    /// fails to compile in `next` instead of silently escaping the tests
+    /// below (a fixed-length array would not).
+    fn all_kinds() -> Vec<ProblemKind> {
+        fn next(kind: &ProblemKind) -> Option<ProblemKind> {
+            match kind {
+                ProblemKind::FullWidthSpace => Some(ProblemKind::LeadingBlankLines { count: 1 }),
+                ProblemKind::LeadingBlankLines { .. } => Some(ProblemKind::ZeroWidthCharacter),
+                ProblemKind::ZeroWidthCharacter => {
+                    Some(ProblemKind::ExcessiveBlankLines { found: 3, limit: 2 })
+                }
+                ProblemKind::ExcessiveBlankLines { .. } => Some(ProblemKind::CodeBlockRemnant),
+                ProblemKind::CodeBlockRemnant => Some(ProblemKind::TodoComment),
+                ProblemKind::TodoComment => Some(ProblemKind::FixmeComment),
+                ProblemKind::FixmeComment => Some(ProblemKind::DebugCode { pattern: "print(" }),
+                ProblemKind::DebugCode { .. } => Some(ProblemKind::SecretPattern { hint: "key" }),
+                ProblemKind::SecretPattern { .. } => Some(ProblemKind::LongLine {
+                    length: 100,
+                    limit: 80,
+                }),
+                ProblemKind::LongLine { .. } => None,
+            }
+        }
+        let mut kinds = vec![ProblemKind::FullWidthSpace];
+        while let Some(k) = next(kinds.last().unwrap()) {
+            kinds.push(k);
+        }
+        kinds
+    }
 
     #[test]
     fn test_fix_kind_ids_match_ignore_id_split() {
-        let fix_ids = [
-            "fullwidth",
-            "leading-blanks",
-            "zero-width",
-            "blank-lines",
-            "code-block",
-        ];
-        assert_eq!(FIX_KIND_IDS, fix_ids);
-        for kind in &ALL_KINDS {
-            match kind.ignore_id() {
-                Some(id) => {
-                    assert!(kind.is_detection_only());
-                    assert!(!is_fix_kind_id(id), "{id}");
-                    assert!(FIX_KIND_IGNORE_HINT.contains(id), "hint omits {id}");
-                }
-                None => assert!(!kind.is_detection_only()),
+        let kinds = all_kinds();
+        let fix_ids: Vec<&str> = kinds.iter().filter_map(ProblemKind::fix_id).collect();
+        assert_eq!(FIX_KIND_IDS.to_vec(), fix_ids);
+        for kind in &kinds {
+            // Each kind is exactly one of fix or detection
+            assert_ne!(kind.fix_id().is_some(), kind.ignore_id().is_some());
+            assert_eq!(kind.is_detection_only(), kind.ignore_id().is_some());
+            if let Some(id) = kind.ignore_id() {
+                assert!(!is_fix_kind_id(id), "{id}");
+                assert!(FIX_KIND_IGNORE_HINT.contains(id), "hint omits {id}");
             }
+        }
+    }
+
+    #[test]
+    fn test_fix_kind_hint_says_cannot_be_suppressed() {
+        assert!(FIX_KIND_IGNORE_HINT.contains("cannot be suppressed"));
+        assert!(!FIX_KIND_IGNORE_HINT.contains("always applied"));
+    }
+
+    #[test]
+    fn test_first_directive_on_line_decides() {
+        // A later `fini:ignore-next-line` on the same line is just text after
+        // the first directive (see README), so line 2 stays reported.
+        for input in [
+            "// TODO x fini:ignore fini:ignore-next-line\n// TODO y\n",
+            "// see fini:ignored; fini:ignore-next-line\n// TODO y\n",
+        ] {
+            let result = normalize_content(input, &NormalizeConfig::default());
+            assert!(
+                result
+                    .problems
+                    .iter()
+                    .any(|p| p.kind == ProblemKind::TodoComment && p.line == 2),
+                "{input:?}"
+            );
         }
     }
 

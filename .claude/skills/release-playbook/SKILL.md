@@ -2,9 +2,9 @@
 name: release-playbook
 description: >
   The verified release procedure for fini: version bump, tag push, the
-  supply-chain-hardened crates.io publish flow (attest-before-publish,
-  hash-drift check), and per-channel propagation (Homebrew, Nix,
-  pre-commit, GitHub Action). Use when: リリース準備, "publish new version",
+  supply-chain-hardened GitHub Release flow (tarball provenance
+  attestation, checksums), and per-channel propagation (Homebrew, Nix,
+  pre-commit, GitHub Action). fini is not published to crates.io. Use when: リリース準備, "publish new version",
   version bump, tagging a release, updating Homebrew/Nix after a
   release. NOT for: routine CI failures on `main`, feature development,
   or anything that doesn't touch a `v*` tag.
@@ -13,10 +13,12 @@ allowed-tools: Read, Bash, Grep, Glob
 
 # fini release playbook
 
-SSoT for the publish flow is `.github/workflows/release.yaml` (three jobs:
-`build` → `release` → `publish-crate`, ~177 lines total; `publish-crate` is
-lines 103-177). This skill summarizes and points there — re-read the file
-before acting, don't trust this summary as current.
+SSoT for the release flow is `.github/workflows/release.yaml` (three jobs:
+`build` → `release` → `update-homebrew-formula`). fini is deliberately not
+published to crates.io (`publish = false` in `Cargo.toml`; the earlier
+`publish-crate` job never succeeded and was removed). This skill summarizes
+and points there — re-read the file before acting, don't trust this summary
+as current.
 
 Architecture reference: `CLAUDE.md` in repo root. Don't duplicate it here.
 
@@ -35,14 +37,15 @@ Architecture reference: `CLAUDE.md` in repo root. Don't duplicate it here.
 2. Bump `version` in `Cargo.toml` (check the current value before trusting
    any number cited elsewhere in this file). Then run `cargo build` (or
    `cargo update -p fini` equivalent) so `Cargo.lock` picks up the new
-   version — `publish-crate`
-   runs `cargo publish --locked --dry-run`, and `--locked` fails if the lock
-   file is stale.
+   version, and commit the updated `Cargo.lock` with the bump (the `build`
+   job runs plain `cargo build --release`, not `--locked`, so a stale lock
+   would not fail CI).
 3. Commit the bump (`chore: bump vX.Y.Z`, matches history, e.g. `57c3c93`).
 4. Tag `vX.Y.Z` matching `Cargo.toml` exactly and push the tag — this is
-   the release trigger (`on.push.tags: v*` in `release.yaml`). The
-   `publish-crate` job's `prepare` step hard-fails the job if
-   `GITHUB_REF_NAME` (minus leading `v`) != the `Cargo.toml` version.
+   the release trigger (`on.push.tags: v*` in `release.yaml`). No job
+   checks the tag against the `Cargo.toml` version any more (only the tag
+   format is validated, in `update-homebrew-formula`), so verify the match
+   yourself before pushing.
 
 **未実行・ファイル根拠で検証**: no build/test/tag/publish command above was
 run in producing this file; each step is read from `ci.yaml` / `release.yaml`
@@ -59,26 +62,15 @@ Per `.github/workflows/release.yaml`:
    `checksums.txt` (sha256sum), attests build provenance on the tarballs
    (`actions/attest-build-provenance`), creates the GitHub Release via
    `softprops/action-gh-release` with the tarballs + checksums attached.
-3. **`publish-crate`** (needs `release`) — the non-obvious part:
-   - `cargo publish --locked --dry-run` — verifies the tag matches
-     `Cargo.toml` version first; the dry-run also produces
-     `target/package/fini-<version>.crate` as a side effect (replaces a
-     separate `cargo package` step, deliberately dropped per commit
-     `496a17e`'s follow-up — dry-run already validates the publish path).
-   - Record `BEFORE` = sha256 of that `.crate`.
-   - **Attest** the `.crate` (`actions/attest-build-provenance`) —
-     attestation happens on the pre-publish file.
-   - `cargo publish --locked --no-verify` — publish. `--no-verify` is used
-     because `cargo publish` always re-packages internally regardless; the
-     verify step would just rebuild redundantly (constraint documented in
-     `496a17e`).
-   - Record `AFTER` = sha256 of the same on-disk `.crate` path post-publish.
-     If `BEFORE != AFTER`, the job fails loudly: the attestation may not
-     cover the uploaded bytes, and the crate is already live — remediation
-     is `cargo yank --version <v>`, then investigate (documented inline in
-     the workflow).
-   - `BEFORE == AFTER` is the proof that what was attested is what
-     crates.io received.
+3. **`update-homebrew-formula`** (needs `release`) — validates the tag
+   format, downloads the release assets, regenerates
+   `HomebrewFormula/fini.rb` (checksums verified, fail closed) and pushes
+   it to `main`.
+
+There is no crates.io publish step: `Cargo.toml` sets `publish = false`, so
+an accidental `cargo publish` is refused. Publishing would need the job
+(with its attest-before-publish and hash-drift check) restored from git
+history plus a working `CARGO_REGISTRY_TOKEN`.
 
 All third-party actions are pinned to commit SHAs (not tags) — a deliberate
 supply-chain decision (see `chore(deps)` commit adding Dependabot for
@@ -91,7 +83,7 @@ stale pins), use the global `actions-pin-audit` skill
 
 | Channel | File | Action needed | Automatic? |
 |---|---|---|---|
-| crates.io | — | none | yes, via `publish-crate` |
+| crates.io | — | not published (`publish = false`) | n/a |
 | GitHub Release (tarballs + checksums.txt) | — | none | yes, via `release` job |
 | Homebrew | `HomebrewFormula/fini.rb` | none — the `update-homebrew-formula` job in `release.yaml` downloads the release assets, verifies `checksums.txt`, regenerates the formula via `scripts/update-homebrew-formula.sh`, and pushes to `main`. After a release, `git pull` and confirm the bot commit landed | yes, via `update-homebrew-formula` (tsukasaI/fini#2) |
 | Nix flake | `flake.nix` | bump `version = "X.Y.Z"` string only — `cargoLock.lockFile` points at `Cargo.lock`, no hash to update | no — manual, single-line edit |
@@ -102,7 +94,7 @@ stale pins), use the global `actions-pin-audit` skill
 
 This summarizes files as of the last edit — re-read before acting:
 
-- `rg -n "^  (build|release|publish-crate):" .github/workflows/release.yaml`
+- `rg -n "^  (build|release|update-homebrew-formula):" .github/workflows/release.yaml`
   — confirm job names/order haven't changed.
 - `rg '^version' Cargo.toml` — current version.
 - `gh issue view 2` — confirm the Homebrew automation issue is still open

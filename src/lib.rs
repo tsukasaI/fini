@@ -1,3 +1,5 @@
+#![warn(unnameable_types)]
+
 mod colors;
 mod config;
 mod normalize;
@@ -9,22 +11,22 @@ pub use colors::{should_use_colors, Colors};
 pub use config::{
     check_editorconfig_conflicts, find_config_file, find_editorconfig, generate_init_file,
     load_config, merge_exclude_patterns, merge_normalize_config, parse_editorconfig,
-    CliNormalizeOptions, FiniToml,
+    CliNormalizeOptions, ConfigError, EditorConfigSettings, FiniToml, NormalizeSection,
 };
-pub use normalize::{normalize_content, NormalizeConfig, FIX_KIND_IGNORE_HINT};
+pub use normalize::{
+    normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind, FIX_KIND_IGNORE_HINT,
+};
 pub use output::{
     escape_line_breaks, print_check_report_to, safe_path_display, warn_suppressed_secrets, Config,
-    OutputContext, OutputMode,
+    OutputContext, OutputMode, RunResult,
 };
 
-use normalize::{NormalizeResult, Problem, ProblemKind};
-use output::RunResult;
 use walker::walk_paths;
 
 use rayon::prelude::*;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 const BINARY_CHECK_SIZE: usize = 8192;
@@ -41,7 +43,7 @@ const BINARY_CHECK_SIZE: usize = 8192;
 const CHUNK_SIZE: usize = 256;
 
 /// Check if content is binary by looking for null bytes in first 8192 bytes
-pub fn is_binary(content: &[u8]) -> bool {
+pub(crate) fn is_binary(content: &[u8]) -> bool {
     let check_len = content.len().min(BINARY_CHECK_SIZE);
     content[..check_len].contains(&0)
 }
@@ -98,6 +100,36 @@ enum FileOutcome {
     Error(io::Error),
 }
 
+/// Files whose `fini:ignore` directives name only fix kinds: the first one
+/// (in deterministic apply order) plus a count, so the once-per-run hint can
+/// point at a file without listing them all.
+#[derive(Default)]
+struct FixKindHintSource {
+    first: Option<PathBuf>,
+    count: usize,
+}
+
+impl FixKindHintSource {
+    fn note(&mut self, path: &Path) {
+        if self.first.is_none() {
+            self.first = Some(path.to_path_buf());
+        }
+        self.count = self.count.saturating_add(1);
+    }
+
+    fn message(&self) -> Option<String> {
+        let first = self.first.as_ref()?;
+        let more = match self.count - 1 {
+            0 => String::new(),
+            n => format!(" and {n} more"),
+        };
+        Some(format!(
+            "{FIX_KIND_IGNORE_HINT} (in {}{more})",
+            output::safe_path_display(first)
+        ))
+    }
+}
+
 /// Main entry point: process all files in given paths
 pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result<RunResult> {
     let mut result = RunResult {
@@ -139,7 +171,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         );
     }
 
-    let mut fix_kind_hint_due = false;
+    let mut fix_kind_hint = FixKindHintSource::default();
     let bar = progress::progress_bar(file_paths.len() as u64, ctx.show_progress);
 
     // Process files in fixed-size chunks: within a chunk, read+normalize run in
@@ -159,14 +191,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
             .collect();
 
         for (path, outcome) in &outcomes {
-            apply_outcome(
-                path,
-                outcome,
-                config,
-                ctx,
-                &mut result,
-                &mut fix_kind_hint_due,
-            );
+            apply_outcome(path, outcome, config, ctx, &mut result, &mut fix_kind_hint);
         }
     }
 
@@ -174,8 +199,10 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
 
     // Advisory only, so --quiet silences it (unlike the secret-suppression
     // audit trail, which is security-relevant and always printed).
-    if fix_kind_hint_due && config.output_mode != OutputMode::Quiet {
-        eprintln!("{FIX_KIND_IGNORE_HINT}");
+    if config.output_mode != OutputMode::Quiet {
+        if let Some(hint) = fix_kind_hint.message() {
+            eprintln!("{hint}");
+        }
     }
 
     output::print_summary(&result, config, ctx);
@@ -190,7 +217,7 @@ fn apply_outcome(
     config: &Config,
     ctx: &OutputContext,
     result: &mut RunResult,
-    fix_kind_hint_due: &mut bool,
+    fix_kind_hint: &mut FixKindHintSource,
 ) {
     match outcome {
         FileOutcome::Skipped { reason } => {
@@ -206,7 +233,9 @@ fn apply_outcome(
             ignores_only_fix_kinds,
         } => {
             record_suppressed(path, suppressed, result);
-            *fix_kind_hint_due |= *ignores_only_fix_kinds;
+            if *ignores_only_fix_kinds {
+                fix_kind_hint.note(path);
+            }
             if ctx.verbose {
                 output::print_checked(path, ctx);
             }
@@ -218,7 +247,9 @@ fn apply_outcome(
             len,
         } => {
             record_suppressed(path, &normalize_result.suppressed, result);
-            *fix_kind_hint_due |= normalize_result.ignores_only_fix_kinds;
+            if normalize_result.ignores_only_fix_kinds {
+                fix_kind_hint.note(path);
+            }
             let fullwidth_count = normalize_result
                 .problems
                 .iter()
@@ -443,6 +474,25 @@ fn write_atomic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fix_kind_hint_source_message() {
+        let mut source = FixKindHintSource::default();
+        assert_eq!(source.message(), None);
+
+        source.note(Path::new("a.txt"));
+        assert_eq!(
+            source.message().unwrap(),
+            format!("{FIX_KIND_IGNORE_HINT} (in a.txt)")
+        );
+
+        source.note(Path::new("b.txt"));
+        source.note(Path::new("c.txt"));
+        assert_eq!(
+            source.message().unwrap(),
+            format!("{FIX_KIND_IGNORE_HINT} (in a.txt and 2 more)")
+        );
+    }
 
     // ===========================================
     // Phase 1.5: Binary Detection
