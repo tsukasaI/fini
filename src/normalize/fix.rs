@@ -23,10 +23,10 @@ pub(super) fn fix_fullwidth_spaces(content: &str, line_map: &[usize]) -> (String
         if count == 0 {
             continue;
         }
-        let line = line_map[line_idx];
+        let orig_line = line_map[line_idx];
         problems.extend(std::iter::repeat_n(
             Problem {
-                line,
+                line: orig_line,
                 kind: ProblemKind::FullWidthSpace,
             },
             count,
@@ -131,7 +131,8 @@ pub(super) fn remove_leading_blank_lines(
         .position(|line| !is_blank_line(line))
         .unwrap_or(lines.len());
 
-    // When only blanks follow a BOM, keep the BOM line: dropping it here would leave a BOM-only line that re-reports a leading blank on every run.
+    // When only blanks follow a BOM, keep the BOM line: dropping it here would
+    // leave a BOM-only line that re-reports a leading blank on every run.
     if !bom.is_empty() && first_non_blank == lines.len() {
         return (content.to_string(), line_map.to_vec(), vec![]);
     }
@@ -168,12 +169,12 @@ pub(super) fn limit_consecutive_blank_lines(
     let mut blank_count = 0;
     let mut problem_start_line = 0;
 
-    let mut flush_run = |blank_count: usize, problem_start_line: usize| {
-        if blank_count > max {
+    let mut flush_run = |run_len: usize, run_start: usize| {
+        if run_len > max {
             problems.push(Problem {
-                line: problem_start_line,
+                line: run_start,
                 kind: ProblemKind::ExcessiveBlankLines {
-                    found: blank_count,
+                    found: run_len,
                     limit: max,
                 },
             });
@@ -211,13 +212,15 @@ pub(super) fn remove_code_block_remnants(
     let (bom, body) = split_bom(content);
 
     for (line_idx, line) in body.lines().enumerate() {
-        let trimmed = line.trim();
+        // Only ' '/'\t' count as fence padding, matching what the blank-line
+        // fixes treat as blank (form feed and NBSP are content there).
+        let trimmed = line.trim_matches([' ', '\t']);
 
         if let Some(after_backticks) = trimmed.strip_prefix("```") {
             let is_valid_fence = after_backticks.is_empty()
                 || after_backticks
                     .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '+' || c.is_whitespace());
+                    .all(|c| c.is_alphanumeric() || matches!(c, '-' | '+' | ' ' | '\t'));
 
             if is_valid_fence {
                 problems.push(Problem {
