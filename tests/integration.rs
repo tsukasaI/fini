@@ -3179,6 +3179,73 @@ fn test_fix_diff_masked_collapse_lists_problems_under_header() {
     );
 }
 
+// issue #193: a masked-away diff still says what would be fixed, via the
+// content-free change summary, in fix mode and in check mode.
+#[test]
+fn test_fix_diff_masked_collapse_lists_change_summary() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("fini.toml");
+    let file = dir.path().join("b.txt");
+    fs::write(&config, "[normalize]\ndetect_secrets = false\n").unwrap();
+    fs::write(&file, "password = \"hunter2hunter2\"  \n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--config")
+        .arg(config.to_str().unwrap())
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let header_pos = stdout.find("Would fix:");
+    let bullet_pos = stdout.find("  - trailing whitespace at line 1");
+    assert!(
+        header_pos.is_some() && bullet_pos.is_some() && header_pos < bullet_pos,
+        "change summary must follow the header: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("hunter2hunter2") && !stderr.contains("hunter2hunter2"),
+        "the raw secret value must never be printed: {stdout:?} {stderr:?}"
+    );
+}
+
+#[test]
+fn test_check_diff_masked_collapse_lists_change_summary() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("fini.toml");
+    let file = dir.path().join("b.txt");
+    fs::write(&config, "[normalize]\ndetect_secrets = false\n").unwrap();
+    fs::write(&file, "password = \"hunter2hunter2\"  \n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--config")
+        .arg(config.to_str().unwrap())
+        .arg("--check")
+        .arg("--diff")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let header_pos = stdout.find("Error:");
+    let bullet_pos = stdout.find("  - trailing whitespace at line 1");
+    assert!(
+        header_pos.is_some() && bullet_pos.is_some() && header_pos < bullet_pos,
+        "change summary must follow the header: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("--- ")
+            && !stdout.contains("hunter2hunter2")
+            && !stderr.contains("hunter2hunter2"),
+        "masked collapse must print no hunk and no raw value: {stdout:?} {stderr:?}"
+    );
+}
+
 // issue #185: with secret detection off there are no problems, but the file
 // is still counted as fixed, so --diff must still name it.
 #[test]

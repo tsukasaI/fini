@@ -228,7 +228,13 @@ fn apply_outcome(
                 // and print_summary picks the wording accordingly.
                 result.files_fixed += 1;
             }
-            output::print_fix_result(path, original, normalize_result, ctx);
+            output::print_fix_result(
+                path,
+                original,
+                normalize_result,
+                ctx,
+                config.normalize.remove_zero_width,
+            );
         }
         FileOutcome::Error(e) => {
             eprintln!("Error processing {}: {e}", output::safe_path_display(path));
