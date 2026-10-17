@@ -8,8 +8,36 @@ fn fini_cmd() -> Command {
     // Not the inherited cwd: cargo runs tests from the package root, which is a git
     // repo, so a developer's fini.toml there would leak into every test via the
     // upward config search. An empty dir outside any repo has nothing to find.
+    //
+    // The shared default cwd is writable, so a test running a mutating mode (e.g.
+    // `--init`) without its own `.current_dir(...)` would write into it and leak into
+    // every other test. Such tests must always set `.current_dir` to their own dir.
+    //
+    // A static is never dropped, so this dir is left behind after the run; the
+    // `fini-it-cwd-` prefix makes those leftovers easy to recognize and sweep.
     static HERMETIC_CWD: OnceLock<TempDir> = OnceLock::new();
-    let cwd = HERMETIC_CWD.get_or_init(|| TempDir::new().unwrap());
+    let cwd = HERMETIC_CWD.get_or_init(|| {
+        let dir = tempfile::Builder::new()
+            .prefix("fini-it-cwd-")
+            .tempdir()
+            .unwrap();
+        // Hermeticity silently fails if TMPDIR sits inside a git repo (fini.toml is
+        // searched upward to the git root) or under a directory with an .editorconfig
+        // (searched upward to `/`). Fail loudly instead, as the unit tests do.
+        for ancestor in dir.path().ancestors() {
+            for marker in [".git", ".editorconfig"] {
+                assert!(
+                    !ancestor.join(marker).exists(),
+                    "integration tests need a hermetic cwd, but {} contains `{marker}` \
+                     (an ancestor of the temp dir {}). Point TMPDIR at a directory \
+                     outside any git repo / .editorconfig tree.",
+                    ancestor.display(),
+                    dir.path().display(),
+                );
+            }
+        }
+        dir
+    });
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fini"));
     cmd.current_dir(cwd.path());
     cmd
@@ -1619,6 +1647,65 @@ fn test_skipped_files_counted_in_summary_without_verbose() {
         stdout.contains("1 files skipped"),
         "summary must surface skipped files: {stdout}"
     );
+}
+
+// An empty file is trivially done, not "not inspected": it must not appear in
+// the skipped count (pins `SkipReason::counts_as_skipped` for Empty).
+#[test]
+fn test_empty_file_not_counted_as_skipped() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("empty.txt");
+    fs::write(&file, b"").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("skipped"),
+        "an empty file must not be reported as skipped: {stdout}"
+    );
+}
+
+#[test]
+fn test_colored_summary_wraps_each_part_and_keeps_secrets_suffix_inside() {
+    // Integration tests run without a TTY, so colors are normally off and a
+    // misplaced reset (or the " (N secrets)" suffix landing after it) would
+    // pass every other test. Force colors and pin the exact escape layout.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("fixable.txt"), "hello   \n").unwrap();
+    fs::write(dir.path().join("binary.bin"), b"hello\x00world").unwrap();
+    // Otherwise clean, so only the fixable file counts as fixed.
+    fs::write(
+        dir.path().join("keys.txt"),
+        "password = \"supersecret123\" # fini:ignore secret\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .env_remove("NO_COLOR")
+        .arg("--color")
+        .arg("--no-progress")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "\x1b[32m1 files fixed\x1b[0m",
+        "\x1b[36m1 files skipped (see --verbose)\x1b[0m",
+        "\x1b[33m1 problems suppressed by fini:ignore (1 secrets)\x1b[0m",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing {expected:?} in summary: {stdout:?}"
+        );
+    }
 }
 
 // ===========================================
@@ -3439,5 +3526,65 @@ fn test_fix_diff_masked_collapse_without_problems_still_names_file() {
     assert!(
         !stdout.contains("hunter2hunter2"),
         "the raw secret value must never reach --diff output: {stdout:?}"
+    );
+}
+
+// ===========================================
+// Inherited git env vs. tracked-file rescue (issue #225)
+// ===========================================
+
+fn clean_git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// issue #225: the strip in the production `git ls-files` call must hold when
+// fini itself inherits redirecting GIT_* vars (e.g. when run from a git
+// hook). Exercises the real path end-to-end, unlike the walker unit test.
+#[test]
+fn test_issue_225_tracked_gitignored_rescue_survives_inherited_git_env() {
+    let dir = TempDir::new().unwrap();
+    clean_git(dir.path(), &["init", "-q"]);
+    fs::write(dir.path().join("ignored.txt"), "// TODO: rescued\n").unwrap();
+    clean_git(dir.path(), &["add", "ignored.txt"]);
+    fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
+
+    let bogus = dir.path().join("nonexistent-git-env");
+    let output = fini_cmd()
+        .env("GIT_DIR", &bogus)
+        .env("GIT_WORK_TREE", &bogus)
+        .env("GIT_INDEX_FILE", &bogus)
+        .env("GIT_COMMON_DIR", &bogus)
+        .env("GIT_OBJECT_DIRECTORY", &bogus)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &bogus)
+        .arg("--check")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("git ls-files") && !stderr.contains("could not run git"),
+        "git failure warning leaked: {stderr:?}"
+    );
+    assert!(
+        stdout.contains("ignored.txt") && stdout.contains("TODO"),
+        "tracked-but-gitignored TODO not reported: {stdout:?} {stderr:?}"
     );
 }
