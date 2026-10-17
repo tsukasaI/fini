@@ -455,13 +455,14 @@ mod tests {
 
     // Quoted so each input matches the "hardcoded secret" regex; only a skip
     // pattern inside the match suppresses it. `std::env` can't appear in a
-    // match (`:` is outside the value class), nor can the placeholder
-    // markers (`<your-`, `${`, `{{`, `ENV[`).
+    // match (no SECRET_PATTERNS match can contain `::`, `<`, `{` or `[`), nor
+    // can the placeholder markers (`<your-`, `${`, `{{`, `ENV[`); those
+    // entries are unreachable, so `test_placeholder_value_not_detected` pins
+    // the placeholder behavior at the regex level instead.
     #[test]
     fn test_secret_skip_env_var_reference() {
         for content in [
             "api_key = \"os.environ.API_KEY\"\n",
-            "API_KEY = \"process.env.API_KEY\"\n",
             "password = \"getenv.PASSWORD\"\n",
         ] {
             assert!(
@@ -478,10 +479,26 @@ mod tests {
         assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
     }
 
+    // Placeholder values never match the secret regexes, so they are not
+    // detected regardless of the skip list.
+    #[test]
+    fn test_placeholder_value_not_detected() {
+        for content in [
+            "api_key = \"<your-api-key>\"\n",
+            "api_key = \"${API_TOKEN}\"\n",
+        ] {
+            assert!(
+                detect_secret_patterns(content, &identity_line_map(content)).is_empty(),
+                "{content:?}"
+            );
+        }
+    }
+
     // issue #77: a skipped placeholder occurrence must not shadow a later,
     // unrelated real secret matching the same pattern on the same line.
+    // Target mutation: `.find_iter` -> `.find` in detect_secret_patterns.
     #[test]
-    fn test_secret_skip_does_not_shadow_later_real_secret_same_line() {
+    fn test_secret_skipped_match_does_not_shadow_later_secret() {
         let content = "api_key = \"process.env.API_KEY\", password = \"hunter2hunter2\"\n";
         let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
