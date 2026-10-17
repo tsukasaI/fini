@@ -160,7 +160,7 @@ pub fn print_check_report_to<W: Write>(
     } else {
         writeln!(w, "{}Error:{} {}", colors.error, colors.reset(), label)?;
 
-        if !show_diff && result.has_changes() {
+        if result.has_changes() {
             print_change_summary_to(w, original, &result.content, remove_zero_width)?;
         }
     }
@@ -274,6 +274,7 @@ pub fn print_fix_result(
     original: &str,
     result: &NormalizeResult,
     ctx: &OutputContext,
+    remove_zero_width: bool,
 ) {
     match ctx.mode {
         OutputMode::Quiet => println!("{}", safe_path_display(path)),
@@ -297,6 +298,17 @@ pub fn print_fix_result(
                     ctx.colors.reset(),
                     safe_path_display(path)
                 );
+                // Line numbers and category names only, so safe under masking
+                // (issue #193).
+                if result.has_changes() {
+                    print_change_summary_to(
+                        &mut io::stdout().lock(),
+                        original,
+                        &result.content,
+                        remove_zero_width,
+                    )
+                    .expect("failed to write to stdout");
+                }
             }
             let stdout = io::stdout();
             print_problems_to(&mut stdout.lock(), &result.problems)
