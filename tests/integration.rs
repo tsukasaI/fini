@@ -2092,10 +2092,19 @@ fn test_stdin_check_diff_masked_away_still_prints_error_header() {
 
     // Trailing whitespace, and a CRLF change, and a U+3000 on a secret line:
     // each leaves masked before/after identical.
-    for input in [
-        &b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"  \n"[..],
-        &b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"\r\n"[..],
-        "aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"\u{3000}\n".as_bytes(),
+    for (input, bullet) in [
+        (
+            &b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"  \n"[..],
+            "  - trailing whitespace at line 1",
+        ),
+        (
+            &b"aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"\r\n"[..],
+            "  - CRLF/CR line endings normalized to LF",
+        ),
+        (
+            "aws_secret_access_key = \"AKIAABCDEFGHIJKLMNOP\"\u{3000}\n".as_bytes(),
+            "  - full-width space at line 1",
+        ),
     ] {
         let mut child = fini_cmd()
             .arg("--stdin")
@@ -2120,10 +2129,10 @@ fn test_stdin_check_diff_masked_away_still_prints_error_header() {
             "Error header missing from stderr: {stderr}"
         );
         let header_pos = stderr.find("Error: stdin");
-        let bullet_pos = stderr.find("  - ");
+        let bullet_pos = stderr.find(bullet);
         assert!(
             header_pos.is_some() && bullet_pos.is_some() && header_pos < bullet_pos,
-            "Error header must precede the problem bullet: {stderr}"
+            "Error header must precede the bullet {bullet:?}: {stderr}"
         );
         assert!(
             !stderr.contains("--- stdin"),
@@ -3262,9 +3271,16 @@ fn test_fix_diff_masked_collapse_lists_change_summary() {
         header_pos.is_some() && bullet_pos.is_some() && header_pos < bullet_pos,
         "change summary must follow the header: {stdout:?}"
     );
+    assert_eq!(
+        stdout.matches("  - trailing whitespace at line 1").count(),
+        1,
+        "bullet must appear exactly once: {stdout:?}"
+    );
     assert!(
-        !stdout.contains("hunter2hunter2") && !stderr.contains("hunter2hunter2"),
-        "the raw secret value must never be printed: {stdout:?} {stderr:?}"
+        !stdout.contains("--- ")
+            && !stdout.contains("hunter2hunter2")
+            && !stderr.contains("hunter2hunter2"),
+        "masked collapse must print no hunk and no raw value: {stdout:?} {stderr:?}"
     );
 }
 
@@ -3294,12 +3310,57 @@ fn test_check_diff_masked_collapse_lists_change_summary() {
         header_pos.is_some() && bullet_pos.is_some() && header_pos < bullet_pos,
         "change summary must follow the header: {stdout:?}"
     );
+    assert_eq!(
+        stdout.matches("  - trailing whitespace at line 1").count(),
+        1,
+        "bullet must appear exactly once: {stdout:?}"
+    );
     assert!(
         !stdout.contains("--- ")
             && !stdout.contains("hunter2hunter2")
             && !stderr.contains("hunter2hunter2"),
         "masked collapse must print no hunk and no raw value: {stdout:?} {stderr:?}"
     );
+}
+
+// issue #215: a partly masked diff must not hide the change on the masked
+// line - the line-1 hunk shows, and the summary names line 2.
+#[test]
+fn test_diff_partly_masked_lists_change_summary_for_masked_line() {
+    for check in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join("fini.toml");
+        let file = dir.path().join("b.txt");
+        fs::write(&config, "[normalize]\ndetect_secrets = false\n").unwrap();
+        fs::write(&file, "x = 1  \npassword = \"hunter2hunter2\"  \n").unwrap();
+
+        let mut cmd = fini_cmd();
+        cmd.arg("--config").arg(config.to_str().unwrap());
+        if check {
+            cmd.arg("--check");
+        }
+        let output = cmd
+            .arg("--diff")
+            .arg(file.to_str().unwrap())
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains("--- ") && stdout.contains("-x = 1  "),
+            "line-1 hunk missing (check={check}): {stdout:?}"
+        );
+        assert_eq!(
+            stdout.matches("  - trailing whitespace at line 2").count(),
+            1,
+            "line-2 summary bullet missing (check={check}): {stdout:?}"
+        );
+        assert!(
+            !stdout.contains("hunter2hunter2") && !stderr.contains("hunter2hunter2"),
+            "raw secret leaked (check={check}): {stdout:?} {stderr:?}"
+        );
+    }
 }
 
 // issue #185: with secret detection off there are no problems, but the file

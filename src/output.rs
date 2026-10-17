@@ -4,6 +4,7 @@ use crate::normalize::{
     NormalizeConfig, NormalizeResult, Problem, ProblemKind,
 };
 use similar::{ChangeTag, TextDiff};
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -154,6 +155,9 @@ pub fn print_check_report_to<W: Write>(
 
     if let Some((orig, new)) = masked_diff {
         print_diff_to(w, label, &orig, &new)?;
+        if masked_diff_hides_changes(original, &result.content) {
+            print_change_summary_to(w, original, &result.content, remove_zero_width)?;
+        }
     } else {
         writeln!(w, "{}Error:{} {}", colors.error, colors.reset(), label)?;
 
@@ -166,12 +170,15 @@ pub fn print_check_report_to<W: Write>(
 }
 
 /// Prints the content-diff-derived summary lines (line endings, missing EOF
-/// newline, extra trailing newlines, trailing whitespace) that Normal-mode
-/// check output shows in place of a diff. Shared by file-mode check output
-/// (to stdout) and `--stdin --check` without `--diff` (to stderr, since
-/// stdin's stdout is reserved for normalized content only - issue #38) -
-/// both need these bullets since fix-only problems never populate
-/// `result.problems` (issue #79).
+/// newline, extra trailing newlines, trailing whitespace). Shown in place of
+/// a diff for Normal-mode check output and `--stdin --check` without
+/// `--diff`, under the `Would fix:` / `Error:` header when masking collapses
+/// a `--diff` (fix mode, check mode, `--stdin --check --diff`), and after a
+/// partly masked diff for changes on masked lines. Shared by file mode (to
+/// stdout) and `--stdin --check` (to stderr, since stdin's stdout is
+/// reserved for normalized content only - issue #38); fix-only problems
+/// never populate `result.problems`, so these bullets are the only report
+/// of them (issue #79).
 pub fn print_change_summary_to<W: Write>(
     w: &mut W,
     original: &str,
@@ -279,6 +286,15 @@ pub fn print_fix_result(
             let (orig, new) = masked_pair(original, &result.content);
             if orig != new {
                 print_diff(&safe_path_display(path), &orig, &new);
+                if masked_diff_hides_changes(original, &result.content) {
+                    print_change_summary_to(
+                        &mut io::stdout().lock(),
+                        original,
+                        &result.content,
+                        remove_zero_width,
+                    )
+                    .expect("failed to write to stdout");
+                }
             } else {
                 // No diff header to attach the problem list to (issue #104).
                 // Always named: the file may be counted as fixed with no
@@ -439,11 +455,47 @@ pub fn print_diff_to<W: Write>(
                     ChangeTag::Insert => '+',
                     ChangeTag::Equal => ' ',
                 };
-                write!(w, "{sign}{change}")?;
+                write!(w, "{sign}{}", escape_terminal_controls(&change.to_string()))?;
             }
         }
     }
     Ok(())
+}
+
+/// Escapes ESC and C1 controls (incl. NEL U+0085) in diff text, so a file
+/// cannot smuggle terminal escape sequences that hide or rewrite output.
+/// Other C0 controls pass through: they have no terminal-command meaning
+/// that reaches past the current line, and `\t` / the line-ending `\n` must
+/// stay intact.
+fn escape_terminal_controls(s: &str) -> Cow<'_, str> {
+    let needs_escape = |c: char| c == '\u{1B}' || ('\u{80}'..='\u{9F}').contains(&c);
+    if !s.contains(needs_escape) {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{1B}' => out.push_str("\\x1b"),
+            c if needs_escape(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Whether masking hides a real change: some changed line pair is identical
+/// once secret lines are masked, so the masked diff shows no hunk for it.
+fn masked_diff_hides_changes(original: &str, content: &str) -> bool {
+    let diff = TextDiff::from_lines(original, content);
+    diff.ops().iter().any(|op| {
+        let (old, new) = (op.old_range(), op.new_range());
+        old.zip(new).any(|(i, j)| {
+            let (Some(a), Some(b)) = (diff.old_slice(i), diff.new_slice(j)) else {
+                return false;
+            };
+            a != b && mask_secret_lines(a) == mask_secret_lines(b)
+        })
+    })
 }
 
 pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
@@ -527,6 +579,20 @@ mod tests {
             "evil\\nFixed: other.txt"
         );
         assert_eq!(safe_path_display(Path::new("a\rb")), "a\\rb");
+    }
+
+    // issue #213: ESC / C1 in diff text must not reach the terminal raw.
+    #[test]
+    fn test_print_diff_to_escapes_esc_and_c1_but_keeps_tab() {
+        let mut out = Vec::new();
+        print_diff_to(&mut out, "f", "\x1b[8mhidden\n", "a\t\u{85}b\u{9f}\n").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            !text.contains('\u{1B}') && !text.chars().any(|c| ('\u{80}'..='\u{9F}').contains(&c)),
+            "raw control char leaked: {text:?}"
+        );
+        assert!(text.contains("-\\x1b[8mhidden\n"), "{text:?}");
+        assert!(text.contains("+a\t\\u{85}b\\u{9f}\n"), "{text:?}");
     }
 
     #[test]
