@@ -310,16 +310,21 @@ pub(super) fn check_line_length(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::normalize::identity_line_map;
 
-    /// Identity map for tests that don't exercise line-number remapping.
-    fn identity_map(content: &str) -> Vec<usize> {
-        (1..=content.lines().count()).collect()
+    #[test]
+    fn debug_patterns_are_non_empty() {
+        // contains_word_boundary treats an empty pattern as "never matches",
+        // which would silently disable a pattern rather than flag every line.
+        for pattern in DEBUG_PATTERNS.iter().chain(STRICT_DEBUG_EXTRA) {
+            assert!(!pattern.is_empty(), "empty debug pattern");
+        }
     }
 
     #[test]
     fn test_todo_basic() {
         let content = "// TODO: fix this\n";
-        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(todos.len(), 1);
         assert_eq!(todos[0].line, 1);
     }
@@ -328,14 +333,14 @@ mod tests {
     fn test_todo_case_insensitive() {
         let content = "// todo: fix\n";
         assert_eq!(
-            detect_todo_and_fixme_comments(content, &identity_map(content))
+            detect_todo_and_fixme_comments(content, &identity_line_map(content))
                 .0
                 .len(),
             1
         );
         let content = "// Todo fix\n";
         assert_eq!(
-            detect_todo_and_fixme_comments(content, &identity_map(content))
+            detect_todo_and_fixme_comments(content, &identity_line_map(content))
                 .0
                 .len(),
             1
@@ -346,7 +351,7 @@ mod tests {
     fn test_todo_requires_word_boundary() {
         let content = "use todoist;\n";
         assert!(
-            detect_todo_and_fixme_comments(content, &identity_map(content))
+            detect_todo_and_fixme_comments(content, &identity_line_map(content))
                 .0
                 .is_empty()
         );
@@ -355,14 +360,14 @@ mod tests {
     #[test]
     fn test_fixme_detected() {
         let content = "# FIXME: broken\n";
-        let (_, fixmes) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (_, fixmes) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(fixmes.len(), 1);
     }
 
     #[test]
     fn test_todo_and_fixme_single_pass_separates_kinds() {
         let content = "// TODO: first\n// FIXME: second\n// TODO: third\n";
-        let (todos, fixmes) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (todos, fixmes) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(todos.iter().map(|p| p.line).collect::<Vec<_>>(), [1, 3]);
         assert_eq!(fixmes.iter().map(|p| p.line).collect::<Vec<_>>(), [2]);
     }
@@ -374,18 +379,18 @@ mod tests {
     #[test]
     fn test_issue_95_directive_kind_list_not_detected_as_marker() {
         let content = "// fini:ignore-next-line todo\n";
-        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert!(todos.is_empty());
 
         let content = "// TODO: x fini:ignore todo\n";
-        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(todos.len(), 1);
     }
 
     #[test]
     fn test_debug_console_log() {
         let content = "console.log('test');\n";
-        let problems = detect_debug_code(content, false, &identity_map(content));
+        let problems = detect_debug_code(content, false, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
         assert!(matches!(
             &problems[0].kind,
@@ -396,16 +401,16 @@ mod tests {
     #[test]
     fn test_debug_dbg_macro() {
         let content = "dbg!(value);\n";
-        let problems = detect_debug_code(content, false, &identity_map(content));
+        let problems = detect_debug_code(content, false, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
     }
 
     #[test]
     fn test_debug_strict_includes_console_error() {
         let content = "console.error('fail');\n";
-        assert!(detect_debug_code(content, false, &identity_map(content)).is_empty());
+        assert!(detect_debug_code(content, false, &identity_line_map(content)).is_empty());
         assert_eq!(
-            detect_debug_code(content, true, &identity_map(content)).len(),
+            detect_debug_code(content, true, &identity_line_map(content)).len(),
             1
         );
     }
@@ -415,9 +420,9 @@ mod tests {
         // "eprintln!(" contains "println!(" as a substring, but not at a word
         // boundary (preceded by 'e'), so non-strict mode must not flag it.
         let content = "eprintln!(\"fail\");\n";
-        assert!(detect_debug_code(content, false, &identity_map(content)).is_empty());
+        assert!(detect_debug_code(content, false, &identity_line_map(content)).is_empty());
         assert_eq!(
-            detect_debug_code(content, true, &identity_map(content)).len(),
+            detect_debug_code(content, true, &identity_line_map(content)).len(),
             1
         );
     }
@@ -425,15 +430,15 @@ mod tests {
     #[test]
     fn test_debug_print_requires_word_boundary() {
         let content = "sprint(x);\n";
-        assert!(detect_debug_code(content, false, &identity_map(content)).is_empty());
+        assert!(detect_debug_code(content, false, &identity_line_map(content)).is_empty());
         let content = "pprint(x);\n";
-        assert!(detect_debug_code(content, false, &identity_map(content)).is_empty());
+        assert!(detect_debug_code(content, false, &identity_line_map(content)).is_empty());
     }
 
     #[test]
     fn test_secret_bearer_token() {
         let content = "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9\n";
-        let problems = detect_secret_patterns(content, &identity_map(content));
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
         assert!(matches!(
             &problems[0].kind,
@@ -444,26 +449,26 @@ mod tests {
     #[test]
     fn test_secret_github_token() {
         let content = "token = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn\"\n";
-        let problems = detect_secret_patterns(content, &identity_map(content));
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
     }
 
     #[test]
     fn test_secret_skip_env_var_reference() {
         let content = "password = process.env.PASSWORD\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
         let content = "key = os.environ['API_KEY']\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
         let content = "key = std::env::var(\"KEY\")\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
     }
 
     #[test]
     fn test_secret_skip_placeholder() {
         let content = "api_key = \"<your-api-key>\"\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
         let content = "token = \"${API_TOKEN}\"\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
     }
 
     // A quoted value that itself matches a skip pattern (unlike the cases
@@ -472,7 +477,7 @@ mod tests {
     #[test]
     fn test_secret_skip_quoted_env_reference() {
         let content = "api_key = \"process.env.API_KEY\"\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
     }
 
     // issue #77: a skipped placeholder occurrence must not shadow a later,
@@ -480,7 +485,7 @@ mod tests {
     #[test]
     fn test_secret_skip_does_not_shadow_later_real_secret_same_line() {
         let content = "api_key = \"process.env.API_KEY\", password = \"hunter2hunter2\"\n";
-        let problems = detect_secret_patterns(content, &identity_map(content));
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
         assert!(matches!(
             &problems[0].kind,
@@ -493,7 +498,7 @@ mod tests {
     #[test]
     fn test_secret_trailing_comment_does_not_bypass_detection() {
         let content = "password = \"hunter2hunter2\"  # ${\n";
-        let problems = detect_secret_patterns(content, &identity_map(content));
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
         assert!(matches!(
             &problems[0].kind,
@@ -501,7 +506,7 @@ mod tests {
         ));
 
         let content = "aws_access_key_id = \"AKIAQWERTYUIOPASDFGH\"  // {{\n";
-        let problems = detect_secret_patterns(content, &identity_map(content));
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
     }
 
@@ -515,19 +520,19 @@ mod tests {
     #[test]
     fn test_line_length_under_limit() {
         let content = "short\n";
-        assert!(check_line_length(content, 80, &identity_map(content)).is_empty());
+        assert!(check_line_length(content, 80, &identity_line_map(content)).is_empty());
     }
 
     #[test]
     fn test_line_length_at_limit() {
         let line = format!("{}\n", "a".repeat(80));
-        assert!(check_line_length(&line, 80, &identity_map(&line)).is_empty());
+        assert!(check_line_length(&line, 80, &identity_line_map(&line)).is_empty());
     }
 
     #[test]
     fn test_line_length_over_limit() {
         let line = format!("{}\n", "a".repeat(81));
-        let problems = check_line_length(&line, 80, &identity_map(&line));
+        let problems = check_line_length(&line, 80, &identity_line_map(&line));
         assert_eq!(problems.len(), 1);
         assert!(matches!(
             &problems[0].kind,
@@ -543,14 +548,17 @@ mod tests {
         // 6 multibyte chars = 6 char count but 18 byte length
         // byte length > limit but char count <= limit should pass
         let line = "ああああああ\n";
-        assert!(check_line_length(line, 6, &identity_map(line)).is_empty());
-        assert_eq!(check_line_length(line, 5, &identity_map(line)).len(), 1);
+        assert!(check_line_length(line, 6, &identity_line_map(line)).is_empty());
+        assert_eq!(
+            check_line_length(line, 5, &identity_line_map(line)).len(),
+            1
+        );
     }
 
     #[test]
     fn test_multiple_debug_on_same_line_reports_first() {
         let content = "console.log(dbg!(x));\n";
-        let problems = detect_debug_code(content, false, &identity_map(content));
+        let problems = detect_debug_code(content, false, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
     }
 
@@ -577,7 +585,7 @@ mod tests {
     #[test]
     fn test_mask_secret_lines_masks_even_when_skip_pattern_present() {
         let content = "api_key = \"process.env.API_KEY\"\n";
-        assert!(detect_secret_patterns(content, &identity_map(content)).is_empty());
+        assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
         let masked = mask_secret_lines(content);
         assert!(!masked.contains("process.env.API_KEY"));
         assert!(masked.contains("[line masked: potential hardcoded secret]"));
@@ -620,7 +628,7 @@ mod tests {
     #[test]
     fn test_detect_secret_patterns_sees_through_invisibles_with_correct_line() {
         let content = "ok\naws_access_key_id = AKIA\u{00AD}ABCDEFGHIJKLMNOP\n";
-        let problems = detect_secret_patterns(content, &identity_map(content));
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].line, 2);
     }
@@ -650,12 +658,12 @@ mod tests {
         assert!(is_valid_marker("TODOLIST TODO: fix", "TODO"));
 
         let content = "// TODOLIST TODO: fix this\n";
-        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(todos.len(), 1);
         assert_eq!(todos[0].line, 1);
 
         let content = "// FIXMELIST FIXME: broken\n";
-        let (_, fixmes) = detect_todo_and_fixme_comments(content, &identity_map(content));
+        let (_, fixmes) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(fixmes.len(), 1);
         assert_eq!(fixmes[0].line, 1);
     }

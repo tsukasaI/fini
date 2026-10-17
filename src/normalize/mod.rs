@@ -71,6 +71,9 @@ pub struct NormalizeResult {
     /// Problems suppressed by `fini:ignore` directives — kept (not discarded)
     /// so suppressions leave an audit trail in output and summaries.
     pub suppressed: Vec<Problem>,
+    /// Some `fini:ignore` directive names only fix-type kinds, so it has no
+    /// effect; callers print `FIX_KIND_IGNORE_HINT` once per run.
+    pub ignores_only_fix_kinds: bool,
 }
 
 impl NormalizeResult {
@@ -103,31 +106,51 @@ pub enum ProblemKind {
     LongLine { length: usize, limit: usize },
 }
 
+/// Identifiers of fix-type kinds, which `fini:ignore` accepts syntactically
+/// but can never act on (see `ProblemKind::ignore_id`).
+const FIX_KIND_IDS: [&str; 5] = [
+    "fullwidth",
+    "leading-blanks",
+    "zero-width",
+    "blank-lines",
+    "code-block",
+];
+
+/// Whether `id` names a fix-type kind rather than a suppressible detection.
+pub(crate) fn is_fix_kind_id(id: &str) -> bool {
+    FIX_KIND_IDS.contains(&id)
+}
+
+/// One-time stderr hint for a `fini:ignore` directive that names only fix
+/// kinds, which silently has no effect otherwise.
+pub const FIX_KIND_IGNORE_HINT: &str = "Hint: fini:ignore only suppresses detections (todo, fixme, debug, secret, line-length); fix kinds like 'fullwidth' are always applied";
+
+/// `1..=n` over the lines of `content`: the line map before any fix has
+/// dropped or moved a line.
+pub(super) fn identity_line_map(content: &str) -> Vec<usize> {
+    (1..=content.lines().count()).collect()
+}
+
 impl ProblemKind {
     pub fn is_detection_only(&self) -> bool {
-        matches!(
-            self,
-            ProblemKind::TodoComment
-                | ProblemKind::FixmeComment
-                | ProblemKind::DebugCode { .. }
-                | ProblemKind::SecretPattern { .. }
-                | ProblemKind::LongLine { .. }
-        )
+        self.ignore_id().is_some()
     }
 
-    /// Returns the identifier used in `fini:ignore` directives
-    pub fn ignore_id(&self) -> &'static str {
+    /// Identifier used in `fini:ignore` directives; `None` for fix kinds,
+    /// which a directive can never suppress. Exhaustive so a new variant
+    /// forces a decision here.
+    pub fn ignore_id(&self) -> Option<&'static str> {
         match self {
-            ProblemKind::TodoComment => "todo",
-            ProblemKind::FixmeComment => "fixme",
-            ProblemKind::DebugCode { .. } => "debug",
-            ProblemKind::SecretPattern { .. } => "secret",
-            ProblemKind::LongLine { .. } => "line-length",
-            ProblemKind::FullWidthSpace => "fullwidth",
-            ProblemKind::LeadingBlankLines { .. } => "leading-blanks",
-            ProblemKind::ZeroWidthCharacter => "zero-width",
-            ProblemKind::ExcessiveBlankLines { .. } => "blank-lines",
-            ProblemKind::CodeBlockRemnant => "code-block",
+            ProblemKind::TodoComment => Some("todo"),
+            ProblemKind::FixmeComment => Some("fixme"),
+            ProblemKind::DebugCode { .. } => Some("debug"),
+            ProblemKind::SecretPattern { .. } => Some("secret"),
+            ProblemKind::LongLine { .. } => Some("line-length"),
+            ProblemKind::FullWidthSpace
+            | ProblemKind::LeadingBlankLines { .. }
+            | ProblemKind::ZeroWidthCharacter
+            | ProblemKind::ExcessiveBlankLines { .. }
+            | ProblemKind::CodeBlockRemnant => None,
         }
     }
 }
@@ -143,7 +166,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
     // problem — from fixes and from detections that run later on the fully
     // normalized content — reports the line the user actually has open,
     // rather than a post-fix line number (issue #76).
-    let mut line_map: Vec<usize> = (1..=result.lines().count()).collect();
+    let mut line_map: Vec<usize> = identity_line_map(&result);
 
     if config.remove_zero_width {
         debug_assert!(line_map.len() >= result.lines().count());
@@ -215,8 +238,10 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
 
     // Partition (not filter) so suppressed problems stay auditable (issue #46)
     let mut suppressed = vec![];
+    let mut ignores_only_fix_kinds = false;
     if !problems.is_empty() {
         let ignore_map = ignore::parse_ignore_directives(&result, &line_map);
+        ignores_only_fix_kinds = ignore_map.has_fix_kinds_only_directive();
         if !ignore_map.is_empty() {
             let (sup, kept): (Vec<_>, Vec<_>) = problems
                 .into_iter()
@@ -233,6 +258,7 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         changed,
         problems,
         suppressed,
+        ignores_only_fix_kinds,
     }
 }
 
@@ -244,6 +270,81 @@ pub fn mask_secret_lines(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ALL_KINDS: [ProblemKind; 10] = [
+        ProblemKind::FullWidthSpace,
+        ProblemKind::LeadingBlankLines { count: 1 },
+        ProblemKind::ZeroWidthCharacter,
+        ProblemKind::ExcessiveBlankLines { found: 3, limit: 2 },
+        ProblemKind::CodeBlockRemnant,
+        ProblemKind::TodoComment,
+        ProblemKind::FixmeComment,
+        ProblemKind::DebugCode { pattern: "print(" },
+        ProblemKind::SecretPattern { hint: "key" },
+        ProblemKind::LongLine {
+            length: 100,
+            limit: 80,
+        },
+    ];
+
+    #[test]
+    fn test_fix_kind_ids_match_ignore_id_split() {
+        let fix_ids = [
+            "fullwidth",
+            "leading-blanks",
+            "zero-width",
+            "blank-lines",
+            "code-block",
+        ];
+        assert_eq!(FIX_KIND_IDS, fix_ids);
+        for kind in &ALL_KINDS {
+            match kind.ignore_id() {
+                Some(id) => {
+                    assert!(kind.is_detection_only());
+                    assert!(!is_fix_kind_id(id), "{id}");
+                    assert!(FIX_KIND_IGNORE_HINT.contains(id), "hint omits {id}");
+                }
+                None => assert!(!kind.is_detection_only()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_ignore_next_line_does_not_suppress_fix_kind() {
+        for input in [
+            "# fini:ignore-next-line\na\u{3000}b\n",
+            "# fini:ignore-next-line fullwidth\na\u{3000}b\n",
+        ] {
+            let result = normalize_content(input, &NormalizeConfig::default());
+            assert!(result.suppressed.is_empty(), "{input:?}");
+            assert!(
+                result
+                    .problems
+                    .iter()
+                    .any(|p| p.kind == ProblemKind::FullWidthSpace && p.line == 2),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ignore_does_not_suppress_zero_width() {
+        let result = normalize_content("x\u{200B}y # fini:ignore\n", &NormalizeConfig::default());
+        assert!(result.suppressed.is_empty());
+        assert!(result
+            .problems
+            .iter()
+            .any(|p| p.kind == ProblemKind::ZeroWidthCharacter && p.line == 1));
+    }
+
+    #[test]
+    fn test_fix_kinds_only_directive_sets_flag() {
+        let config = NormalizeConfig::default();
+        let flagged = |input: &str| normalize_content(input, &config).ignores_only_fix_kinds;
+        assert!(flagged("a\u{3000}b # fini:ignore fullwidth\n"));
+        assert!(!flagged("a\u{3000}b # fini:ignore\n"));
+        assert!(!flagged("a\u{3000}b # fini:ignore todo\n"));
+    }
 
     #[test]
     fn test_ignored_problems_recorded_as_suppressed() {

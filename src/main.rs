@@ -8,7 +8,7 @@ use fini::{
     generate_init_file, load_config, merge_exclude_patterns, merge_normalize_config,
     normalize_content, parse_editorconfig, print_check_report_to, read_gated, run,
     safe_path_display, should_use_colors, warn_suppressed_secrets, CliNormalizeOptions, Colors,
-    Config, FiniToml, OutputContext, OutputMode, SkipReason,
+    Config, FiniToml, OutputContext, OutputMode, SkipReason, FIX_KIND_IGNORE_HINT,
 };
 
 /// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
@@ -253,6 +253,10 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
 
     // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
     warn_suppressed_secrets("stdin", &result.suppressed);
+    // Advisory only: --quiet silences it, unlike the audit trail above.
+    if result.ignores_only_fix_kinds && !cli.quiet {
+        eprintln!("{FIX_KIND_IGNORE_HINT}");
+    }
 
     if cli.check {
         if result.has_changes() || result.has_detection_problems() {

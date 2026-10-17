@@ -159,7 +159,7 @@ API_KEY = "sk_test_example"
 
 Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`
 
-Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading or excess blank lines, code block remnants) are never suppressed, since the content changes regardless; unrecognized kinds are ignored.
+Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading blank lines, consecutive blank lines, code block remnants) are never suppressed, since the content changes regardless. Unrecognized or fix-type kinds have no effect; a directive naming only fix-type kinds (e.g. `fini:ignore fullwidth`) prints a one-time stderr hint per run (not with `--quiet`).
 
 Everything on a line from `fini:ignore`/`fini:ignore-next-line` onward is
 directive syntax, not code, so it's never scanned for TODO/FIXME markers or

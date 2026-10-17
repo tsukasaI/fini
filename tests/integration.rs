@@ -1331,7 +1331,60 @@ fn test_stdin_check_ignore_fullwidth_still_reports_line_1() {
     assert_eq!(output.status.code(), Some(1));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("line 1"), "missing line-1 bullet: {stderr}");
+    assert!(
+        stderr.contains("full-width space at line 1"),
+        "missing line-1 bullet: {stderr}"
+    );
+}
+
+#[test]
+fn test_fix_kind_only_ignore_hint_printed_once_across_files() {
+    let dir = TempDir::new().unwrap();
+    for name in ["a.txt", "b.txt"] {
+        fs::write(
+            dir.path().join(name),
+            "a\u{3000}b # fini:ignore fullwidth\n",
+        )
+        .unwrap();
+    }
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr
+            .matches("Hint: fini:ignore only suppresses detections")
+            .count(),
+        1,
+        "hint must print exactly once: {stderr}"
+    );
+
+    let quiet = fini_cmd()
+        .arg("--check")
+        .arg("--quiet")
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&quiet.stderr).contains("Hint:"));
+}
+
+#[test]
+fn test_ignore_with_detection_kind_prints_no_fix_kind_hint() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("a.txt");
+    fs::write(&file, "a\u{3000}b # TODO fini:ignore todo\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Hint:"));
 }
 
 #[test]
