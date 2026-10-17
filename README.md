@@ -264,10 +264,6 @@ never fails on detection-only problems (TODOs, debug code, secrets) — always u
                                  # before v0.4.0, which predates attestations.
 ```
 
-## VS Code Extension
-
-See [editors/vscode](./editors/vscode) for a VS Code extension that runs fini on save.
-
 ## Exit codes
 
 | Code | Meaning |
