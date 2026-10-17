@@ -13,6 +13,7 @@ pub use config::{
 };
 pub use normalize::{
     mask_secret_lines, normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind,
+    FIX_KIND_IGNORE_HINT,
 };
 pub use output::{
     escape_line_breaks, print_change_summary_to, print_check_report_to, print_diff, print_diff_to,
@@ -84,6 +85,7 @@ enum FileOutcome {
     },
     Clean {
         suppressed: Vec<Problem>,
+        ignores_only_fix_kinds: bool,
     },
     Changed {
         original: String,
@@ -137,6 +139,7 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         );
     }
 
+    let mut fix_kind_hint_due = false;
     let progress = ProgressReporter::new(file_paths.len() as u64, ctx.show_progress);
 
     // Process files in fixed-size chunks: within a chunk, read+normalize run in
@@ -156,11 +159,24 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
             .collect();
 
         for (path, outcome) in &outcomes {
-            apply_outcome(path, outcome, config, ctx, &mut result);
+            apply_outcome(
+                path,
+                outcome,
+                config,
+                ctx,
+                &mut result,
+                &mut fix_kind_hint_due,
+            );
         }
     }
 
     progress.finish();
+
+    // Advisory only, so --quiet silences it (unlike the secret-suppression
+    // audit trail, which is security-relevant and always printed).
+    if fix_kind_hint_due && config.output_mode != OutputMode::Quiet {
+        eprintln!("{FIX_KIND_IGNORE_HINT}");
+    }
 
     output::print_summary(&result, config, ctx);
 
@@ -174,6 +190,7 @@ fn apply_outcome(
     config: &Config,
     ctx: &OutputContext,
     result: &mut RunResult,
+    fix_kind_hint_due: &mut bool,
 ) {
     match outcome {
         FileOutcome::Skipped { reason } => {
@@ -184,8 +201,12 @@ fn apply_outcome(
                 output::print_skipped(path, reason.label(), ctx);
             }
         }
-        FileOutcome::Clean { suppressed } => {
+        FileOutcome::Clean {
+            suppressed,
+            ignores_only_fix_kinds,
+        } => {
             record_suppressed(path, suppressed, result);
+            *fix_kind_hint_due |= *ignores_only_fix_kinds;
             if ctx.verbose {
                 output::print_checked(path, ctx);
             }
@@ -197,6 +218,7 @@ fn apply_outcome(
             len,
         } => {
             record_suppressed(path, &normalize_result.suppressed, result);
+            *fix_kind_hint_due |= normalize_result.ignores_only_fix_kinds;
             let fullwidth_count = normalize_result
                 .problems
                 .iter()
@@ -339,6 +361,7 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
     if !normalize_result.has_changes() && !normalize_result.has_detection_problems() {
         return FileOutcome::Clean {
             suppressed: normalize_result.suppressed,
+            ignores_only_fix_kinds: normalize_result.ignores_only_fix_kinds,
         };
     }
 

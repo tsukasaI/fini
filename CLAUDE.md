@@ -59,7 +59,7 @@ Code block remnant removal runs before the blank-line fixes so blank lines expos
 
 Then detections run: TODOs, FIXMEs, debug code, secrets, line length.
 
-Finally, if any problems exist, `fini:ignore` / `fini:ignore-next-line` directives are parsed from the normalized content and matching problems are filtered out (post-filter in `normalize/ignore.rs`).
+Finally, if any problems exist, `fini:ignore` / `fini:ignore-next-line` directives are parsed from the normalized content and matching detection problems are filtered out (post-filter in `normalize/ignore.rs`). The filter applies to detection kinds only: `ProblemKind::ignore_id()` is `None` for fix kinds, so they are never suppressed.
 
 ### Testing conventions
 
