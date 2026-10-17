@@ -877,6 +877,39 @@ mod tests {
     }
 
     #[test]
+    fn test_code_block_fence_padding_is_space_tab_fullwidth_only() {
+        let config = NormalizeConfig {
+            fix_code_blocks: true,
+            ..NormalizeConfig::default()
+        };
+        for kept in ["\u{0c}```\n", "```\u{a0}\n"] {
+            let result = normalize_content(kept, &config);
+            assert_eq!(result.content, kept);
+            assert!(result.problems.is_empty());
+            assert_eq!(normalize_content(&result.content, &config).content, kept);
+        }
+        for fence in [
+            "```rust\n",
+            "  ```  \n",
+            "\t```\t\n",
+            "```\u{3000}\n",
+            "\u{3000}```\n",
+            "```rust\u{3000}\n",
+        ] {
+            let result = normalize_content(fence, &config);
+            assert_eq!(result.content, "");
+            assert!(result
+                .problems
+                .iter()
+                .any(|p| matches!(p.kind, ProblemKind::CodeBlockRemnant)));
+            let wrapped = format!("a\n{fence}b\n");
+            let once = normalize_content(&wrapped, &config).content;
+            assert_eq!(once, "a\nb\n");
+            assert_eq!(normalize_content(&once, &config).content, once);
+        }
+    }
+
+    #[test]
     fn test_code_block_problem_reports_line() {
         let config = NormalizeConfig {
             fix_code_blocks: true,
@@ -986,6 +1019,12 @@ mod tests {
         for ch in ['\u{0c}', '\u{a0}', '\u{2028}', '\u{85}'] {
             let leading = format!("{ch}\nfoo\n");
             assert_eq!(normalize_content(&leading, &config).content, leading);
+            // Same input behind a BOM exercises the BOM branch of the leading-blank fix.
+            let bom_leading = format!("\u{feff}{leading}");
+            assert_eq!(
+                normalize_content(&bom_leading, &config).content,
+                bom_leading
+            );
             let run = format!("a\n{ch}\n{ch}\n{ch}\nb\n");
             let result = normalize_content(&run, &config);
             assert_eq!(result.content, run);
