@@ -2,7 +2,7 @@ use super::{Problem, ProblemKind};
 
 const FULLWIDTH_SPACE: char = '\u{3000}';
 
-const ZERO_WIDTH_CHARS: &[char] = &[
+pub(super) const ZERO_WIDTH_CHARS: &[char] = &[
     '\u{200B}', // Zero Width Space (ZWSP)
     '\u{200C}', // Zero Width Non-Joiner (ZWNJ)
     '\u{200D}', // Zero Width Joiner (ZWJ)
@@ -37,10 +37,14 @@ pub(super) fn fix_fullwidth_spaces(content: &str, line_map: &[usize]) -> (String
     (result, problems)
 }
 
+pub(crate) fn trim_trailing_ws(line: &str) -> &str {
+    line.trim_end_matches([' ', '\t'])
+}
+
 pub(super) fn remove_trailing_whitespace(content: &str) -> String {
     content
         .lines()
-        .map(|line| line.trim_end_matches([' ', '\t']))
+        .map(trim_trailing_ws)
         .collect::<Vec<_>>()
         .join("\n")
 }
