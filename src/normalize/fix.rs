@@ -212,15 +212,16 @@ pub(super) fn remove_code_block_remnants(
     let (bom, body) = split_bom(content);
 
     for (line_idx, line) in body.lines().enumerate() {
-        // Only ' '/'\t' count as fence padding, matching what the blank-line
-        // fixes treat as blank (form feed and NBSP are content there).
-        let trimmed = line.trim_matches([' ', '\t']);
+        // ' ', '\t' and U+3000 are fence padding because later fixes rewrite or
+        // strip them; form feed and NBSP are content, so they keep a line from
+        // being a fence.
+        let trimmed = line.trim_matches([' ', '\t', FULLWIDTH_SPACE]);
 
         if let Some(after_backticks) = trimmed.strip_prefix("```") {
             let is_valid_fence = after_backticks.is_empty()
-                || after_backticks
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || matches!(c, '-' | '+' | ' ' | '\t'));
+                || after_backticks.chars().all(|c| {
+                    c.is_alphanumeric() || matches!(c, '-' | '+' | ' ' | '\t' | FULLWIDTH_SPACE)
+                });
 
             if is_valid_fence {
                 problems.push(Problem {

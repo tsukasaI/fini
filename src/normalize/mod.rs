@@ -877,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn test_code_block_fence_trims_only_space_and_tab() {
+    fn test_code_block_fence_padding_is_space_tab_fullwidth_only() {
         let config = NormalizeConfig {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
@@ -886,14 +886,26 @@ mod tests {
             let result = normalize_content(kept, &config);
             assert_eq!(result.content, kept);
             assert!(result.problems.is_empty());
+            assert_eq!(normalize_content(&result.content, &config).content, kept);
         }
-        for removed in ["```rust\n", "  ```  \n", "\t```\t\n"] {
-            let result = normalize_content(removed, &config);
+        for fence in [
+            "```rust\n",
+            "  ```  \n",
+            "\t```\t\n",
+            "```\u{3000}\n",
+            "\u{3000}```\n",
+            "```rust\u{3000}\n",
+        ] {
+            let result = normalize_content(fence, &config);
             assert_eq!(result.content, "");
             assert!(result
                 .problems
                 .iter()
                 .any(|p| matches!(p.kind, ProblemKind::CodeBlockRemnant)));
+            let wrapped = format!("a\n{fence}b\n");
+            let once = normalize_content(&wrapped, &config).content;
+            assert_eq!(once, "a\nb\n");
+            assert_eq!(normalize_content(&once, &config).content, once);
         }
     }
 
