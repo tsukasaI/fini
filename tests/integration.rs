@@ -1572,6 +1572,28 @@ fn test_skipped_files_counted_in_summary_without_verbose() {
     );
 }
 
+// An empty file is trivially done, not "not inspected": it must not appear in
+// the skipped count (pins `SkipReason::counts_as_skipped` for Empty).
+#[test]
+fn test_empty_file_not_counted_as_skipped() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("empty.txt");
+    fs::write(&file, b"").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("skipped"),
+        "an empty file must not be reported as skipped: {stdout}"
+    );
+}
+
 // ===========================================
 // Atomic Writes & Symlinks (issue #35)
 // ===========================================
