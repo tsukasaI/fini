@@ -3069,7 +3069,12 @@ fn test_issue_103() {
             .any(|l| l.contains("Skipping") && l.contains("small.txt")),
         "small.txt is under the limit and must not be skipped: {stdout:?}"
     );
-    assert_eq!(fs::read_to_string(&small).unwrap(), "hello\n");
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("Checked:") && l.contains("small.txt")),
+        "small.txt must be reported as checked, not silently dropped: {stdout:?}"
+    );
 }
 
 // issue #103: raising --max-file-size lets a file that would otherwise be

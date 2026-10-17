@@ -148,12 +148,9 @@ pub fn print_check_report_to<W: Write>(
     // print the masked diff when masking doesn't collapse the change to
     // identical text, otherwise an `Error:` header - callers only reach this
     // when has_changes() or the problem list is non-empty.
-    let masked_diff = if show_diff {
-        let (orig, new) = masked_pair(original, &result.content);
-        (orig != new).then_some((orig, new))
-    } else {
-        None
-    };
+    let masked_diff = show_diff
+        .then(|| masked_pair(original, &result.content))
+        .filter(|(orig, new)| orig != new);
 
     if let Some((orig, new)) = masked_diff {
         print_diff_to(w, label, &orig, &new)?;
