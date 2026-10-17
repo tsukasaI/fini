@@ -7,6 +7,7 @@ license = "MIT"
 repository = "https://github.com/tsukasaI/fini"
 homepage = "https://github.com/tsukasaI/fini"
 readme = "README.md"
+publish = false
 keywords = ["cli", "formatting", "normalize", "whitespace", "newline"]
 categories = ["command-line-utilities", "development-tools"]
 

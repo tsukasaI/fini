@@ -1352,6 +1352,16 @@ fn test_fix_kind_only_ignore_hint_printed_once_across_files() {
         1,
         "hint must print exactly once: {stderr}"
     );
+    let hint_line = stderr
+        .lines()
+        .find(|l| l.contains("Hint: fini:ignore"))
+        .unwrap();
+    assert!(hint_line.contains("cannot be suppressed"), "{hint_line}");
+    assert!(
+        hint_line.contains("a.txt") || hint_line.contains("b.txt"),
+        "hint must name a file: {hint_line}"
+    );
+    assert!(hint_line.ends_with(" and 1 more)"), "{hint_line}");
 
     let quiet = fini_cmd()
         .arg("--check")
@@ -1359,6 +1369,45 @@ fn test_fix_kind_only_ignore_hint_printed_once_across_files() {
         .arg(dir.path().to_str().unwrap())
         .output()
         .unwrap();
+    assert!(!String::from_utf8_lossy(&quiet.stderr).contains("Hint:"));
+}
+
+#[test]
+fn test_fix_kind_only_ignore_hint_names_single_file() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("only.txt");
+    fs::write(&file, "a\u{3000}b # fini:ignore fullwidth\n").unwrap();
+
+    let output = fini_cmd()
+        .arg("--check")
+        .arg(file.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let hint_line = stderr
+        .lines()
+        .find(|l| l.contains("Hint: fini:ignore"))
+        .unwrap();
+    assert!(hint_line.contains("only.txt"), "{hint_line}");
+    assert!(!hint_line.contains("more"), "{hint_line}");
+}
+
+#[test]
+fn test_stdin_check_fix_kind_only_ignore_prints_hint_unless_quiet() {
+    let input = "a\u{3000}b # fini:ignore fullwidth\n".as_bytes();
+
+    let out = run_stdin(&["--check"], input);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Hint: fini:ignore only suppresses detections"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("cannot be suppressed"), "{stderr}");
+
+    let quiet = run_stdin(&["--check", "--quiet"], input);
+    assert_eq!(quiet.status.code(), Some(1));
     assert!(!String::from_utf8_lossy(&quiet.stderr).contains("Hint:"));
 }
 
