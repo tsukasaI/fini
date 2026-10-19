@@ -36,9 +36,12 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
-          cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "fini") | .version' > cargo-version.txt
-          read -r CARGO_VERSION < cargo-version.txt
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "fini") | .version')"
+          if [ -z "$CARGO_VERSION" ] || [ "$CARGO_VERSION" = "null" ]; then
+            echo "::error::Could not read package version from cargo metadata" >&2
+            exit 1
+          fi
           if [ "$TAG" != "$CARGO_VERSION" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
             exit 1
