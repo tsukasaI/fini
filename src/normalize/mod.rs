@@ -304,6 +304,10 @@ mod tests {
     /// fails to compile in `next` instead of silently escaping the tests
     /// below (a fixed-length array would not).
     fn all_kinds() -> Vec<ProblemKind> {
+        // Invariant: exactly one arm returns `None` (the terminal). A new
+        // variant must be chained from the current terminal and become the
+        // new terminal; a bare `NewKind => None` arm would drop it from the
+        // walk. The assert below pins the terminal to the last-declared variant.
         fn next(kind: &ProblemKind) -> Option<ProblemKind> {
             match kind {
                 ProblemKind::FullWidthSpace => Some(ProblemKind::LeadingBlankLines { count: 1 }),
@@ -327,6 +331,11 @@ mod tests {
         while let Some(k) = next(kinds.last().unwrap()) {
             kinds.push(k);
         }
+        // Keep in sync with the last variant declared in `ProblemKind`.
+        assert!(
+            matches!(kinds.last(), Some(ProblemKind::LongLine { .. })),
+            "walk must end at the last-declared ProblemKind variant"
+        );
         kinds
     }
 
