@@ -3533,19 +3533,21 @@ fn test_fix_diff_masked_collapse_without_problems_still_names_file() {
 // Inherited git env vs. tracked-file rescue (issue #225)
 // ===========================================
 
+const INHERITED_GIT_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
+
 fn clean_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
+    let mut cmd = Command::new("git");
+    for var in INHERITED_GIT_ENV {
+        cmd.env_remove(var);
+    }
+    let out = cmd.arg("-C").arg(dir).args(args).output().unwrap();
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -3565,18 +3567,16 @@ fn test_issue_225_tracked_gitignored_rescue_survives_inherited_git_env() {
     fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
 
     let bogus = dir.path().join("nonexistent-git-env");
-    let output = fini_cmd()
-        .env("GIT_DIR", &bogus)
-        .env("GIT_WORK_TREE", &bogus)
-        .env("GIT_INDEX_FILE", &bogus)
-        .env("GIT_COMMON_DIR", &bogus)
-        .env("GIT_OBJECT_DIRECTORY", &bogus)
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &bogus)
-        .arg("--check")
-        .arg(dir.path())
-        .output()
-        .unwrap();
+    let mut cmd = fini_cmd();
+    for var in INHERITED_GIT_ENV {
+        cmd.env(var, &bogus);
+    }
+    let output = cmd.arg("--check").arg(dir.path()).output().unwrap();
 
+    assert!(
+        !output.status.success(),
+        "a TODO finding under --check must fail"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

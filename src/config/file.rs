@@ -75,8 +75,8 @@ pub fn find_file_upward(
 }
 
 // Any existing `.git` entry counts (`Path::exists`, symlinks followed): a
-// directory (even an empty one) or the file a worktree/submodule uses. The walk above stops at the same marker, so this
-// must agree with it.
+// directory (even an empty one) or the file a worktree/submodule uses. The
+// walk above stops at the same marker, so this must agree with it.
 //
 // Deliberately not unified with walker::has_real_git_repo, which answers a
 // different question (should a git failure warn?): it canonicalizes `root` and
