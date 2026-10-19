@@ -199,7 +199,10 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
             // Same raw + stripped match as `mask_secret_lines`, so
             // `--keep-zero-width` can't hide a split secret from the check
             // while the diff masks it.
-            let stripped = strip_mask_ignorable(line);
+            let stripped = match strip_mask_ignorable(line) {
+                Cow::Owned(s) => Some(s),
+                Cow::Borrowed(_) => None,
+            };
             patterns.iter().find_map(|pattern| {
                 // find_iter (not find): a skipped placeholder match must not
                 // short-circuit past a later, unrelated real secret matching
@@ -210,7 +213,7 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
                         .find_iter(text)
                         .any(|m| !skip_pattern_within_match(m.as_str()))
                 };
-                (reportable(line) || reportable(&stripped)).then(|| Problem {
+                (reportable(line) || stripped.as_deref().is_some_and(reportable)).then(|| Problem {
                     line: line_map[line_idx],
                     kind: ProblemKind::SecretPattern { hint: pattern.hint },
                 })
@@ -223,9 +226,10 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
 /// `\t\n\r`, DEL, C1, U+2028/U+2029) that render as nothing or as blank, so
 /// they can split a secret invisibly. A superset of `fix::ZERO_WIDTH_CHARS`
 /// (enforced by a test). Stripping can switch a match off (U+000B/000C/0085/
-/// 2028/2029 are regex `\s`, which `bearer\s+` needs), so callers match the raw
-/// line as well as the stripped one: stripping can only add matches. Not `char::is_control()`: that would also
-/// strip `\t`, merging tokens a tab separates.
+/// 2028/2029 are regex `\s`, which `bearer\s+` needs), so callers match the
+/// raw line as well as the stripped one: stripping can only add matches. Not
+/// `char::is_control()`: that would also strip `\t`, merging tokens a tab
+/// separates.
 fn is_mask_ignorable(c: char) -> bool {
     matches!(c,
         '\u{00}'..='\u{08}' | '\u{0B}'..='\u{0C}' | '\u{0E}'..='\u{1F}' | '\u{7F}'..='\u{9F}'
@@ -260,17 +264,23 @@ fn strip_mask_ignorable(text: &str) -> Cow<'_, str> {
 ///
 /// Invisible characters are stripped before the match decision (a BOM at
 /// position 0 included), regardless of `--keep-zero-width`, so they cannot
-/// split a secret and leak the raw line (issue #156).
+/// split a secret and leak the raw line (issue #156). The raw line is matched
+/// as well, since stripping can switch a match off (see `is_mask_ignorable`).
 pub(super) fn mask_secret_lines(content: &str) -> String {
     let patterns = &*SECRET_PATTERNS;
     let mut out = String::with_capacity(content.len());
 
     for line in content.split_inclusive('\n') {
         let text = line.strip_suffix('\n').unwrap_or(line);
-        let stripped = strip_mask_ignorable(text);
+        let stripped = match strip_mask_ignorable(text) {
+            Cow::Owned(s) => Some(s),
+            Cow::Borrowed(_) => None,
+        };
         let hint = patterns
             .iter()
-            .find(|p| p.regex.is_match(text) || p.regex.is_match(&stripped))
+            .find(|p| {
+                p.regex.is_match(text) || stripped.as_deref().is_some_and(|s| p.regex.is_match(s))
+            })
             .map(|p| p.hint);
 
         match hint {

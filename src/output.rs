@@ -10,13 +10,13 @@ use std::path::Path;
 
 /// Escapes `\r` and `\n` (and ESC / C1 controls, via `escape_terminal_controls`)
 /// so `s` is safe to print as a standalone output line. A string containing
-/// line breaks would otherwise forge extra output
-/// lines (issue #87) - e.g. `--quiet` mode's one-path-per-line contract,
-/// which scripts parse, or a fake "Fixed: <other-file>" line spoofing a
-/// result for a file that was never touched. Used both for a path's own
-/// `Display` form (`safe_path_display`) and for error text that embeds a
-/// path (e.g. a walk error from the `ignore` crate), since by the time
-/// that text reaches us it's already a flattened string, not a `Path`.
+/// line breaks would otherwise forge extra output lines (issue #87) - e.g.
+/// `--quiet` mode's one-path-per-line contract, which scripts parse, or a fake
+/// "Fixed: <other-file>" line spoofing a result for a file that was never
+/// touched. Used both for a path's own `Display` form (`safe_path_display`)
+/// and for error text that embeds a path (e.g. a walk error from the `ignore`
+/// crate), since by the time that text reaches us it's already a flattened
+/// string, not a `Path`.
 pub fn escape_line_breaks(s: &str) -> String {
     escape_terminal_controls(s)
         .replace('\r', "\\r")
@@ -158,7 +158,7 @@ pub fn print_check_report_to<W: Write>(
 
     if let Some((orig, new)) = masked_diff {
         print_diff_to(w, label, &orig, &new)?;
-        if masked_diff_hides_changes(original, &result.content) {
+        if masked_diff_hides_changes(original, &result.content, &orig, &new) {
             print_change_summary_to(w, original, &result.content, remove_zero_width)?;
         }
     } else {
@@ -289,7 +289,7 @@ pub fn print_fix_result(
             let (orig, new) = masked_pair(original, &result.content);
             if orig != new {
                 print_diff(&safe_path_display(path), &orig, &new);
-                if masked_diff_hides_changes(original, &result.content) {
+                if masked_diff_hides_changes(original, &result.content, &orig, &new) {
                     print_change_summary_to(
                         &mut io::stdout().lock(),
                         original,
@@ -491,24 +491,25 @@ fn escape_terminal_controls(s: &str) -> Cow<'_, str> {
 /// lines that differ, or when a changed op touches a masked line (its raw
 /// content is not shown). Masking preserves the `\n`-line count, so raw and
 /// masked lines share indices.
-fn masked_diff_hides_changes(original: &str, content: &str) -> bool {
+fn masked_diff_hides_changes(
+    original: &str,
+    content: &str,
+    masked_old_text: &str,
+    masked_new_text: &str,
+) -> bool {
     let raw_old: Vec<&str> = original.split_inclusive('\n').collect();
     let raw_new: Vec<&str> = content.split_inclusive('\n').collect();
-    let (masked_old_text, masked_new_text) = masked_pair(original, content);
     let masked_old: Vec<&str> = masked_old_text.split_inclusive('\n').collect();
     let masked_new: Vec<&str> = masked_new_text.split_inclusive('\n').collect();
     if raw_old.len() != masked_old.len() || raw_new.len() != masked_new.len() {
         return true;
     }
 
-    // Trim `\n` only: a `\r\n` vs `\n` difference is a real change.
-    let line = |s: &str| s.trim_end_matches('\n').to_owned();
     let diff = TextDiff::configure().diff_slices(&masked_old, &masked_new);
     diff.ops().iter().any(|op| {
         let (tag, mut old, mut new) = op.as_tag_tuple();
         if tag == DiffTag::Equal {
-            old.zip(new)
-                .any(|(i, j)| line(raw_old[i]) != line(raw_new[j]))
+            old.zip(new).any(|(i, j)| raw_old[i] != raw_new[j])
         } else {
             old.any(|i| raw_old[i] != masked_old[i]) || new.any(|j| raw_new[j] != masked_new[j])
         }
@@ -637,30 +638,35 @@ mod tests {
 
     const SECRET_LINE: &str = "password = \"hunter2hunter2\"";
 
+    fn hides_changes(old: &str, new: &str) -> bool {
+        let (masked_old, masked_new) = masked_pair(old, new);
+        masked_diff_hides_changes(old, new, &masked_old, &masked_new)
+    }
+
     #[test]
     fn test_masked_diff_hides_changes_leading_blank_and_trailing_ws_before_secret() {
         let old = format!("\n{SECRET_LINE}  \n");
         let new = format!("{SECRET_LINE}\n");
-        assert!(masked_diff_hides_changes(&old, &new));
+        assert!(hides_changes(&old, &new));
     }
 
     #[test]
     fn test_masked_diff_hides_changes_secret_line_missing_eof_newline() {
         let old = format!("x = 1\n{SECRET_LINE}");
         let new = format!("x = 1\n{SECRET_LINE}\n");
-        assert!(masked_diff_hides_changes(&old, &new));
+        assert!(hides_changes(&old, &new));
     }
 
     #[test]
     fn test_masked_diff_hides_changes_lone_cr_inside_secret_line() {
         let old = format!("{SECRET_LINE}\rfoo\n");
         let new = format!("{SECRET_LINE}\nfoo\n");
-        assert!(masked_diff_hides_changes(&old, &new));
+        assert!(hides_changes(&old, &new));
     }
 
     #[test]
     fn test_masked_diff_hides_changes_false_without_secrets() {
-        assert!(!masked_diff_hides_changes("a  \nb\n", "a\nb\n"));
+        assert!(!hides_changes("a  \nb\n", "a\nb\n"));
     }
 
     #[test]
