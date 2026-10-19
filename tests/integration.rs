@@ -3533,6 +3533,8 @@ fn test_fix_diff_masked_collapse_without_problems_still_names_file() {
 // Inherited git env vs. tracked-file rescue (issue #225)
 // ===========================================
 
+// Literal list on purpose (not walker's GIT_ENV_TO_STRIP): deriving it from
+// the production list would stay green if a var were dropped there.
 const INHERITED_GIT_ENV: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -3573,9 +3575,11 @@ fn test_issue_225_tracked_gitignored_rescue_survives_inherited_git_env() {
     }
     let output = cmd.arg("--check").arg(dir.path()).output().unwrap();
 
-    assert!(
-        !output.status.success(),
-        "a TODO finding under --check must fail"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a TODO finding under --check must exit 1: {:?}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
