@@ -413,7 +413,7 @@ mod tests {
     // Literal list on purpose (not GIT_ENV_TO_STRIP): deriving the expectations
     // from the constant would stay green if a var were dropped from it.
     #[test]
-    fn test_issue_164_git_helper_strips_inherited_git_env() {
+    fn test_issue_164_strip_inherited_git_env_removes_redirecting_vars() {
         let must_strip = [
             "GIT_DIR",
             "GIT_WORK_TREE",
