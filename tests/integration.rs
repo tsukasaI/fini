@@ -24,7 +24,10 @@ fn fini_cmd() -> Command {
         // Hermeticity silently fails if TMPDIR sits inside a git repo (fini.toml is
         // searched upward to the git root) or under a directory with an .editorconfig
         // (searched upward to `/`). Fail loudly instead, as the unit tests do.
-        for ancestor in dir.path().ancestors() {
+        // Walk the canonical ancestors too: a TMPDIR symlinked into a repo, or macOS
+        // `/var -> /private/var`, hides the real parents from the lexical walk.
+        let real = dir.path().canonicalize().unwrap();
+        for ancestor in dir.path().ancestors().chain(real.ancestors()) {
             for marker in [".git", ".editorconfig"] {
                 assert!(
                     !ancestor.join(marker).exists(),
@@ -1687,7 +1690,7 @@ fn test_colored_summary_wraps_each_part_and_keeps_secrets_suffix_inside() {
     .unwrap();
 
     let output = fini_cmd()
-        .env_remove("NO_COLOR")
+        .env("NO_COLOR", "1")
         .arg("--color")
         .arg("--no-progress")
         .arg(dir.path().to_str().unwrap())
@@ -1706,6 +1709,13 @@ fn test_colored_summary_wraps_each_part_and_keeps_secrets_suffix_inside() {
             "missing {expected:?} in summary: {stdout:?}"
         );
     }
+
+    let summary = stdout.lines().rfind(|l| !l.is_empty()).unwrap();
+    assert_eq!(
+        summary,
+        "\x1b[32m1 files fixed\x1b[0m, \x1b[36m1 files skipped (see --verbose)\x1b[0m, \
+         \x1b[33m1 problems suppressed by fini:ignore (1 secrets)\x1b[0m"
+    );
 }
 
 // ===========================================
@@ -2621,18 +2631,23 @@ fn test_issue_87_walk_error_message() {
     fs::write(blocked.join("inner.txt"), "content").unwrap();
     fs::write(dir.path().join("good.txt"), "hello\n").unwrap();
 
+    struct RestoreMode<'a>(&'a Path);
+    impl Drop for RestoreMode<'_> {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
     let mut perms = fs::metadata(&blocked).unwrap().permissions();
     perms.set_mode(0o000);
-    fs::set_permissions(&blocked, perms.clone()).unwrap();
+    let _restore = RestoreMode(&blocked);
+    fs::set_permissions(&blocked, perms).unwrap();
 
     let output = fini_cmd()
         .arg("--quiet")
         .arg(dir.path().to_str().unwrap())
         .output()
         .unwrap();
-
-    perms.set_mode(0o755);
-    fs::set_permissions(&blocked, perms).unwrap();
 
     // Running as root ignores the 000 permission, which would make the loop
     // below pass on empty stderr instead of actually exercising the fix.
