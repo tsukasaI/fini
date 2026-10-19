@@ -212,9 +212,11 @@ pub(super) fn remove_code_block_remnants(
     let (bom, body) = split_bom(content);
 
     for (line_idx, line) in body.lines().enumerate() {
-        // ' ', '\t' and U+3000 are fence padding because later fixes rewrite or
-        // strip them; form feed and NBSP are content, so they keep a line from
-        // being a fence.
+        // ' ', '\t' and U+3000 are fence padding: indentation and trailing blanks
+        // around a fence are still a fence, and U+3000 must be included because
+        // fullwidth conversion plus trailing-whitespace removal would otherwise turn
+        // a kept line into a bare fence (breaking idempotency). Form feed and NBSP
+        // are content, so they keep a line from being a fence.
         let trimmed = line.trim_matches([' ', '\t', FULLWIDTH_SPACE]);
 
         if let Some(after_backticks) = trimmed.strip_prefix("```") {
