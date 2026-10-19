@@ -196,21 +196,24 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
-            // Same strip as `mask_secret_lines`, so `--keep-zero-width` can't
-            // hide a split secret from the check while the diff masks it.
-            let line = &*strip_mask_ignorable(line);
+            // Same raw + stripped match as `mask_secret_lines`, so
+            // `--keep-zero-width` can't hide a split secret from the check
+            // while the diff masks it.
+            let stripped = strip_mask_ignorable(line);
             patterns.iter().find_map(|pattern| {
                 // find_iter (not find): a skipped placeholder match must not
                 // short-circuit past a later, unrelated real secret matching
                 // the same pattern on the same line.
-                pattern
-                    .regex
-                    .find_iter(line)
-                    .find(|m| !skip_pattern_within_match(m.as_str()))
-                    .map(|_| Problem {
-                        line: line_map[line_idx],
-                        kind: ProblemKind::SecretPattern { hint: pattern.hint },
-                    })
+                let reportable = |text: &str| {
+                    pattern
+                        .regex
+                        .find_iter(text)
+                        .any(|m| !skip_pattern_within_match(m.as_str()))
+                };
+                (reportable(line) || reportable(&stripped)).then(|| Problem {
+                    line: line_map[line_idx],
+                    kind: ProblemKind::SecretPattern { hint: pattern.hint },
+                })
             })
         })
         .collect()
@@ -219,8 +222,9 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
 /// Default_Ignorable_Code_Point members plus control characters (C0 except
 /// `\t\n\r`, DEL, C1, U+2028/U+2029) that render as nothing or as blank, so
 /// they can split a secret invisibly. A superset of `fix::ZERO_WIDTH_CHARS`
-/// (enforced by a test); over-stripping is safe because the stripped text only
-/// feeds the secret-match decision. Not `char::is_control()`: that would also
+/// (enforced by a test). Stripping can switch a match off (U+000B/000C/0085/
+/// 2028/2029 are regex `\s`, which `bearer\s+` needs), so callers match the raw
+/// line as well as the stripped one: stripping can only add matches. Not `char::is_control()`: that would also
 /// strip `\t`, merging tokens a tab separates.
 fn is_mask_ignorable(c: char) -> bool {
     matches!(c,
@@ -266,7 +270,7 @@ pub(super) fn mask_secret_lines(content: &str) -> String {
         let stripped = strip_mask_ignorable(text);
         let hint = patterns
             .iter()
-            .find(|p| p.regex.is_match(&stripped))
+            .find(|p| p.regex.is_match(text) || p.regex.is_match(&stripped))
             .map(|p| p.hint);
 
         match hint {
@@ -461,7 +465,7 @@ mod tests {
     // match (no SECRET_PATTERNS match can contain `::`, `<`, `{` or `[`), nor
     // can the placeholder markers (`<your-`, `${`, `{{`, `ENV[`); those
     // entries are unreachable, so `test_placeholder_value_not_detected` pins
-    // the placeholder behavior at the regex level instead.
+    // that no regex matches such placeholders, plus the end-to-end result.
     #[test]
     fn test_secret_skip_env_var_reference() {
         for content in [
@@ -482,19 +486,42 @@ mod tests {
         assert!(detect_secret_patterns(content, &identity_line_map(content)).is_empty());
     }
 
-    // Placeholder values never match the secret regexes, so they are not
-    // detected regardless of the skip list.
+    // Placeholder values never match the secret regexes (asserted directly,
+    // then end-to-end), so the skip entries for them stay unreachable.
     #[test]
     fn test_placeholder_value_not_detected() {
         for content in [
             "api_key = \"<your-api-key>\"\n",
             "api_key = \"${API_TOKEN}\"\n",
+            "api_key = \"{{API_TOKEN}}\"\n",
+            "api_key = \"ENV[API_TOKEN]\"\n",
         ] {
             assert!(
                 detect_secret_patterns(content, &identity_line_map(content)).is_empty(),
                 "{content:?}"
             );
+            assert!(
+                SECRET_PATTERNS.iter().all(|p| !p.regex.is_match(content)),
+                "placeholder now matches a secret regex; skip entries are reachable again: {content:?}"
+            );
         }
+    }
+
+    // issue #229: U+2028 is regex `\s` yet stripped as mask-ignorable, so the
+    // bearer pattern only matches the raw line.
+    #[test]
+    fn test_bearer_with_line_separator_masked_and_detected() {
+        let content = "Authorization: Bearer\u{2028}abcdefghijklmnopqrstuvwx\n";
+        let problems = detect_secret_patterns(content, &identity_line_map(content));
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::SecretPattern { hint } if *hint == "bearer token"
+        ));
+        assert_eq!(
+            mask_secret_lines(content),
+            "[line masked: potential bearer token]\n"
+        );
     }
 
     // issue #77: a skipped placeholder occurrence must not shadow a later,

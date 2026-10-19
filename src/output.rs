@@ -3,13 +3,14 @@ use crate::normalize::{
     line_after_pre_trim_fixes, mask_secret_lines, normalize_line_endings, trim_trailing_ws,
     NormalizeConfig, NormalizeResult, Problem, ProblemKind,
 };
-use similar::{ChangeTag, TextDiff};
+use similar::{ChangeTag, DiffTag, TextDiff};
 use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// Escapes `\r` and `\n` so `s` is safe to print as a standalone output
-/// line. A string containing either would otherwise forge extra output
+/// Escapes `\r` and `\n` (and ESC / C1 controls, via `escape_terminal_controls`)
+/// so `s` is safe to print as a standalone output line. A string containing
+/// line breaks would otherwise forge extra output
 /// lines (issue #87) - e.g. `--quiet` mode's one-path-per-line contract,
 /// which scripts parse, or a fake "Fixed: <other-file>" line spoofing a
 /// result for a file that was never touched. Used both for a path's own
@@ -17,7 +18,9 @@ use std::path::Path;
 /// path (e.g. a walk error from the `ignore` crate), since by the time
 /// that text reaches us it's already a flattened string, not a `Path`.
 pub fn escape_line_breaks(s: &str) -> String {
-    s.replace('\r', "\\r").replace('\n', "\\n")
+    escape_terminal_controls(s)
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
 }
 
 /// A path's `Display` form, safe to print as a standalone output line.
@@ -483,18 +486,32 @@ fn escape_terminal_controls(s: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Whether masking hides a real change: some changed line pair is identical
-/// once secret lines are masked, so the masked diff shows no hunk for it.
+/// Whether the masked diff hides a real change. It is computed on the masked
+/// lines (as displayed), so a change is hidden when an `Equal` op covers raw
+/// lines that differ, or when a changed op touches a masked line (its raw
+/// content is not shown). Masking preserves the `\n`-line count, so raw and
+/// masked lines share indices.
 fn masked_diff_hides_changes(original: &str, content: &str) -> bool {
-    let diff = TextDiff::from_lines(original, content);
+    let raw_old: Vec<&str> = original.split_inclusive('\n').collect();
+    let raw_new: Vec<&str> = content.split_inclusive('\n').collect();
+    let (masked_old_text, masked_new_text) = masked_pair(original, content);
+    let masked_old: Vec<&str> = masked_old_text.split_inclusive('\n').collect();
+    let masked_new: Vec<&str> = masked_new_text.split_inclusive('\n').collect();
+    if raw_old.len() != masked_old.len() || raw_new.len() != masked_new.len() {
+        return true;
+    }
+
+    // Trim `\n` only: a `\r\n` vs `\n` difference is a real change.
+    let line = |s: &str| s.trim_end_matches('\n').to_owned();
+    let diff = TextDiff::configure().diff_slices(&masked_old, &masked_new);
     diff.ops().iter().any(|op| {
-        let (old, new) = (op.old_range(), op.new_range());
-        old.zip(new).any(|(i, j)| {
-            let (Some(a), Some(b)) = (diff.old_slice(i), diff.new_slice(j)) else {
-                return false;
-            };
-            a != b && mask_secret_lines(a) == mask_secret_lines(b)
-        })
+        let (tag, mut old, mut new) = op.as_tag_tuple();
+        if tag == DiffTag::Equal {
+            old.zip(new)
+                .any(|(i, j)| line(raw_old[i]) != line(raw_new[j]))
+        } else {
+            old.any(|i| raw_old[i] != masked_old[i]) || new.any(|j| raw_new[j] != masked_new[j])
+        }
     })
 }
 
@@ -593,6 +610,57 @@ mod tests {
         );
         assert!(text.contains("-\\x1b[8mhidden\n"), "{text:?}");
         assert!(text.contains("+a\t\\u{85}b\\u{9f}\n"), "{text:?}");
+    }
+
+    // issue #229: path labels (diff headers, Error:/Fixed:, walk errors) must
+    // not carry raw ESC / C1 either.
+    #[test]
+    fn test_safe_path_display_escapes_esc_and_c1() {
+        assert_eq!(
+            safe_path_display(Path::new("a\u{1b}[8mb\u{9b}c")),
+            "a\\x1b[8mb\\u{9b}c"
+        );
+    }
+
+    #[test]
+    fn test_diff_header_label_carries_no_raw_esc_or_c1() {
+        let label = safe_path_display(Path::new("evil\u{1b}[2J\u{9b}x"));
+        let mut out = Vec::new();
+        print_diff_to(&mut out, &label, "a\n", "b\n").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            !text.contains('\u{1B}') && !text.chars().any(|c| ('\u{80}'..='\u{9F}').contains(&c)),
+            "raw control char leaked: {text:?}"
+        );
+        assert!(text.starts_with("--- evil\\x1b[2J\\u{9b}x\n"), "{text:?}");
+    }
+
+    const SECRET_LINE: &str = "password = \"hunter2hunter2\"";
+
+    #[test]
+    fn test_masked_diff_hides_changes_leading_blank_and_trailing_ws_before_secret() {
+        let old = format!("\n{SECRET_LINE}  \n");
+        let new = format!("{SECRET_LINE}\n");
+        assert!(masked_diff_hides_changes(&old, &new));
+    }
+
+    #[test]
+    fn test_masked_diff_hides_changes_secret_line_missing_eof_newline() {
+        let old = format!("x = 1\n{SECRET_LINE}");
+        let new = format!("x = 1\n{SECRET_LINE}\n");
+        assert!(masked_diff_hides_changes(&old, &new));
+    }
+
+    #[test]
+    fn test_masked_diff_hides_changes_lone_cr_inside_secret_line() {
+        let old = format!("{SECRET_LINE}\rfoo\n");
+        let new = format!("{SECRET_LINE}\nfoo\n");
+        assert!(masked_diff_hides_changes(&old, &new));
+    }
+
+    #[test]
+    fn test_masked_diff_hides_changes_false_without_secrets() {
+        assert!(!masked_diff_hides_changes("a  \nb\n", "a\nb\n"));
     }
 
     #[test]
