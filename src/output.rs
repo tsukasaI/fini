@@ -490,7 +490,9 @@ fn escape_terminal_controls(s: &str) -> Cow<'_, str> {
 /// lines (as displayed), so a change is hidden when an `Equal` op covers raw
 /// lines that differ, or when a changed op touches a masked line (its raw
 /// content is not shown). Masking preserves the `\n`-line count, so raw and
-/// masked lines share indices.
+/// masked lines share indices. `masked_old_text` and `masked_new_text` must be
+/// `mask_secret_lines(original)` and `mask_secret_lines(content)`, i.e. the same
+/// masked text passed to `print_diff_to`.
 fn masked_diff_hides_changes(
     original: &str,
     content: &str,
