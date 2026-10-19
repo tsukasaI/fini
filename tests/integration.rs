@@ -32,17 +32,26 @@ fn fini_cmd() -> Command {
                 dir.path().display()
             )
         });
+        let shown = if real == dir.path() {
+            dir.path().display().to_string()
+        } else {
+            format!("{} -> {}", dir.path().display(), real.display())
+        };
         for ancestor in dir.path().ancestors().chain(real.ancestors()) {
             for marker in [".git", ".editorconfig"] {
-                assert!(
-                    !ancestor.join(marker).try_exists().unwrap_or(true),
-                    "integration tests need a hermetic cwd, but {} contains `{marker}` \
-                     (an ancestor of the temp dir {} -> {}). Point TMPDIR at a directory \
-                     outside any git repo / .editorconfig tree.",
-                    ancestor.display(),
-                    dir.path().display(),
-                    real.display(),
-                );
+                match ancestor.join(marker).try_exists() {
+                    Ok(false) => {}
+                    Ok(true) => panic!(
+                        "integration tests need a hermetic cwd, but {} contains `{marker}` \
+                         (an ancestor of the temp dir {shown}). Point TMPDIR at a directory \
+                         outside any git repo / .editorconfig tree.",
+                        ancestor.display(),
+                    ),
+                    Err(e) => panic!(
+                        "cannot check {}/{marker} for the hermetic cwd guard: {e}",
+                        ancestor.display(),
+                    ),
+                }
             }
         }
         dir
