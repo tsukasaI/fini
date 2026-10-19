@@ -101,7 +101,7 @@ enum FileOutcome {
 }
 
 /// Files whose `fini:ignore` directives name only fix kinds: the first one
-/// (in deterministic apply order) plus a count, so the once-per-run hint can
+/// (in walk order) plus a count, so the once-per-run hint can
 /// point at a file without listing them all.
 #[derive(Default)]
 struct FixKindHintSource {

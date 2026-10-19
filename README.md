@@ -11,7 +11,7 @@ Standardizes file formatting as a finishing step after code editing.
 
 ### Cargo (from source)
 ```bash
-cargo install --git https://github.com/tsukasaI/fini
+cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0
 ```
 
 ### Nix
@@ -36,14 +36,14 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/tsukasaI/fini
-    rev: v0.3.0  # Use the latest release tag
+    rev: v0.7.0  # Use the latest release tag
     hooks:
       - id: fini        # Auto-fix mode
       # or
       - id: fini-check  # Check-only mode (for CI)
 ```
 
-Note: Requires fini to be installed (`cargo install --git https://github.com/tsukasaI/fini`, or via Homebrew/Nix).
+Note: Requires fini to be installed (`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0`, or via Homebrew/Nix).
 
 ## Usage
 
