@@ -26,16 +26,22 @@ fn fini_cmd() -> Command {
         // (searched upward to `/`). Fail loudly instead, as the unit tests do.
         // Walk the canonical ancestors too: a TMPDIR symlinked into a repo, or macOS
         // `/var -> /private/var`, hides the real parents from the lexical walk.
-        let real = dir.path().canonicalize().unwrap();
+        let real = dir.path().canonicalize().unwrap_or_else(|e| {
+            panic!(
+                "cannot canonicalize hermetic cwd {}: {e}",
+                dir.path().display()
+            )
+        });
         for ancestor in dir.path().ancestors().chain(real.ancestors()) {
             for marker in [".git", ".editorconfig"] {
                 assert!(
-                    !ancestor.join(marker).exists(),
+                    !ancestor.join(marker).try_exists().unwrap_or(true),
                     "integration tests need a hermetic cwd, but {} contains `{marker}` \
-                     (an ancestor of the temp dir {}). Point TMPDIR at a directory \
+                     (an ancestor of the temp dir {} -> {}). Point TMPDIR at a directory \
                      outside any git repo / .editorconfig tree.",
                     ancestor.display(),
                     dir.path().display(),
+                    real.display(),
                 );
             }
         }
@@ -2634,6 +2640,7 @@ fn test_issue_87_walk_error_message() {
     struct RestoreMode<'a>(&'a Path);
     impl Drop for RestoreMode<'_> {
         fn drop(&mut self) {
+            // best effort: panicking in Drop during unwind would abort
             let _ = fs::set_permissions(self.0, fs::Permissions::from_mode(0o755));
         }
     }
