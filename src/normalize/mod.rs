@@ -307,7 +307,8 @@ mod tests {
         // Invariant: exactly one arm returns `None` (the terminal). A new
         // variant must be chained from the current terminal and become the
         // new terminal; a bare `NewKind => None` arm would drop it from the
-        // walk. The assert below pins the terminal to the last-declared variant.
+        // walk. The assert below pins the terminal to the variant named there,
+        // which must be the last-declared one.
         fn next(kind: &ProblemKind) -> Option<ProblemKind> {
             match kind {
                 ProblemKind::FullWidthSpace => Some(ProblemKind::LeadingBlankLines { count: 1 }),
