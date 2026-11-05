@@ -23,6 +23,14 @@ pub fn escape_line_breaks(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
+/// Escapes ESC / C1 controls and `\r` but keeps `\n`, for a multi-line
+/// diagnostic (e.g. a toml parse error with its source snippet and caret)
+/// whose line structure must stay readable. A lone `\r` could overwrite the
+/// visible line, and ESC / C1 could rewrite the terminal.
+pub fn escape_multiline_message(s: &str) -> String {
+    escape_terminal_controls(s).replace('\r', "\\r")
+}
+
 /// A path's `Display` form, safe to print as a standalone output line.
 /// See `escape_line_breaks`.
 pub fn safe_path_display(path: &Path) -> String {
@@ -591,6 +599,22 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_escape_multiline_message_escapes_controls_and_keeps_newline() {
+        assert_eq!(
+            escape_multiline_message("a\x1b[2J\u{85}b\rc\nd"),
+            "a\\x1b[2J\\u{85}b\\rc\nd"
+        );
+    }
+
+    #[test]
+    fn test_escape_multiline_message_plain_text_unchanged() {
+        assert_eq!(
+            escape_multiline_message("line one\n  | x\n"),
+            "line one\n  | x\n"
+        );
+    }
 
     #[test]
     fn test_safe_path_display_escapes_newline_and_cr() {
