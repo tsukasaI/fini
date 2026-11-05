@@ -916,6 +916,21 @@ mod tests {
         perms.set_mode(0o000);
         fs::set_permissions(&blocked_dir, perms.clone()).unwrap();
 
+        // Probe the real effect of mode 000 instead of checking the uid: root
+        // (and CAP_DAC_OVERRIDE) can still read the directory, leaving nothing
+        // to exercise. Outside CI, skip with a reason; under CI, fall through
+        // and fail so a permissive runner cannot silently drop this check.
+        if fs::read_dir(&blocked_dir).is_ok() && std::env::var_os("CI").is_none() {
+            perms.set_mode(0o755);
+            fs::set_permissions(&blocked_dir, perms).unwrap();
+            eprintln!(
+                "skipping test_per_entry_walk_error_does_not_abort_walk: \
+                 a mode-000 directory is still readable (running as root?); \
+                 set CI to run it anyway"
+            );
+            return;
+        }
+
         let paths = vec![dir.path().to_string_lossy().to_string()];
         let entries: Vec<_> = walk_paths(&paths, &[], false).unwrap();
 
