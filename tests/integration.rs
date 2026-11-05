@@ -2659,6 +2659,18 @@ fn test_issue_87_walk_error_message() {
     let _restore = RestoreMode(&blocked);
     fs::set_permissions(&blocked, perms).unwrap();
 
+    // Probe the real effect of mode 000 instead of checking the uid: root (and
+    // CAP_DAC_OVERRIDE) can still read the directory, leaving no walk error to
+    // exercise. Outside CI, skip with a reason; under CI, fall through and fail
+    // so a permissive runner cannot silently drop this check.
+    if fs::read_dir(&blocked).is_ok() && std::env::var_os("CI").is_none() {
+        eprintln!(
+            "skipping test_issue_87_walk_error_message: a mode-000 directory is \
+             still readable (running as root?); set CI to run it anyway"
+        );
+        return;
+    }
+
     let output = fini_cmd()
         .arg("--quiet")
         .arg(dir.path().to_str().unwrap())
