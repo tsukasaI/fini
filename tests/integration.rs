@@ -2915,6 +2915,26 @@ fn test_issue_94_default_zero_width_removal_still_trims() {
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
 }
 
+#[test]
+fn test_default_run_leaves_emoji_zwj_sequence_intact() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("emoji.md");
+    let content = "\u{1F468}\u{200D}\u{1F4BB} wrote this\n";
+    fs::write(&file, content).unwrap();
+
+    let check = fini_cmd().arg("--check").arg(&file).output().unwrap();
+    assert_eq!(
+        check.status.code(),
+        Some(0),
+        "an emoji sequence is not a problem to report: {:?}",
+        String::from_utf8_lossy(&check.stdout)
+    );
+
+    let fix = fini_cmd().arg(&file).output().unwrap();
+    assert_eq!(fix.status.code(), Some(0));
+    assert_eq!(fs::read_to_string(&file).unwrap(), content);
+}
+
 // issue #93: TOML `detect_secrets = false` disables *detection*, but must
 // not also disable masking a secret's raw value out of --diff output -
 // masking is an output guarantee, not part of the detection feature.

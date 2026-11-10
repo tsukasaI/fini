@@ -743,16 +743,55 @@ mod tests {
         assert_eq!(result.content, "helloworld\n");
     }
 
-    #[test]
-    fn test_remove_zwj() {
-        let input = "a\u{200D}b\n";
+    fn assert_untouched_by_zero_width_removal(input: &str) {
         let result = normalize_content(input, &NormalizeConfig::default());
-        assert_eq!(result.content, "ab\n");
+        assert_eq!(result.content, input);
+        assert!(
+            !result
+                .problems
+                .iter()
+                .any(|p| matches!(p.kind, ProblemKind::ZeroWidthCharacter)),
+            "nothing was removed, so nothing may be reported: {:?}",
+            result.problems
+        );
     }
 
     #[test]
-    fn test_remove_zwnj() {
-        let input = "a\u{200C}b\n";
+    fn test_keeps_zwj_in_emoji_sequence() {
+        // U+1F468 U+200D U+1F4BB renders as one "man technologist" emoji.
+        assert_untouched_by_zero_width_removal("\u{1F468}\u{200D}\u{1F4BB}\n");
+    }
+
+    #[test]
+    fn test_keeps_zwnj_in_persian_text() {
+        assert_untouched_by_zero_width_removal(
+            "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}\n",
+        );
+    }
+
+    #[test]
+    fn test_keeps_directional_marks() {
+        assert_untouched_by_zero_width_removal("a\u{200E}b\u{200F}c\n");
+    }
+
+    #[test]
+    fn test_secret_split_by_kept_zwj_is_still_detected() {
+        let input = "password = \"hunter\u{200D}2hunter2\"\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.content, input);
+        assert!(
+            result
+                .problems
+                .iter()
+                .any(|p| matches!(p.kind, ProblemKind::SecretPattern { .. })),
+            "keeping the joiner must not let it hide a secret: {:?}",
+            result.problems
+        );
+    }
+
+    #[test]
+    fn test_remove_word_joiner() {
+        let input = "a\u{2060}b\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "ab\n");
     }
@@ -796,7 +835,7 @@ mod tests {
 
     #[test]
     fn test_multiple_zero_width_chars() {
-        let input = "a\u{200B}b\u{200D}c\n";
+        let input = "a\u{200B}b\u{2060}c\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "abc\n");
         assert_eq!(
@@ -1058,7 +1097,7 @@ mod tests {
 
     #[test]
     fn test_consecutive_zero_width_chars() {
-        let input = "a\u{200B}\u{200D}\u{200C}b\n";
+        let input = "a\u{200B}\u{2060}\u{FEFF}b\n";
         let result = normalize_content(input, &NormalizeConfig::default());
         assert_eq!(result.content, "ab\n");
         assert_eq!(
