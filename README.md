@@ -221,21 +221,25 @@ nothing on stdout. Empty input is still accepted.
 
 ## Claude Code Integration
 
-Add to `.claude/settings.json`:
+Add to `.claude/settings.json` (requires [`jq`](https://jqlang.org/)):
 
 ```json
 {
   "hooks": {
     "PostToolUse": [{
-      "matcher": "Edit|Write|NotebookEdit",
+      "matcher": "Edit|Write",
       "hooks": [{
         "type": "command",
-        "command": "fini \"$TOOL_INPUT.file_path\""
+        "command": "jq -r '.tool_input.file_path // empty' | xargs -I{} fini {}"
       }]
     }]
   }
 }
 ```
+
+Claude Code passes the hook its input as JSON on stdin; `jq` extracts the
+edited file's path. `xargs -I{}` passes that path as one argument, so paths
+with spaces work, and runs nothing when the input has no `file_path`.
 
 ## GitHub Action
 
