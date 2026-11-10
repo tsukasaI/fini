@@ -551,6 +551,32 @@ fn test_invalid_config_toml_exits_2() {
 }
 
 #[test]
+fn test_invalid_config_toml_escapes_terminal_controls() {
+    // issue #243
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("fini.toml"), "x = \x1b[2J oops\r\n").unwrap();
+    fs::write(dir.path().join("test.txt"), "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--check")
+        .arg(".")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        !output.stderr.contains(&0x1b),
+        "raw ESC in stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("{}", stderr.escape_debug());
+    assert!(stderr.contains("\\x1b[2J"), "stderr: {stderr}");
+    assert!(stderr.contains("\n  |"), "stderr: {stderr}");
+}
+
+#[test]
 fn test_config_unknown_key_exits_2() {
     // A typo'd key (e.g. max_blank_line instead of max_blank_lines) must be
     // rejected outright, not silently ignored while the rest of the config
