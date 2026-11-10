@@ -1042,6 +1042,119 @@ exclude = ["*.log"]
     assert_eq!(fs::read_to_string(&file2).unwrap(), "world"); // unchanged
 }
 
+#[test]
+fn test_exclude_applies_to_explicit_relative_file() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("vendor")).unwrap();
+    fs::write(dir.path().join("main.txt"), "hello").unwrap();
+    fs::write(dir.path().join("vendor/lib.txt"), "world").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--exclude", "vendor/", "main.txt", "vendor/lib.txt"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("main.txt")).unwrap(),
+        "hello\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("vendor/lib.txt")).unwrap(),
+        "world",
+        "an explicitly passed file under an excluded directory must stay untouched"
+    );
+}
+
+#[test]
+fn test_dot_prefix_of_explicit_file_is_not_matched_by_exclude() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("main.txt"), "hello").unwrap();
+    fs::write(dir.path().join("sub/other.txt"), "world").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path().join("sub"))
+        .args(["--exclude", ".*", "./other.txt", "../main.txt"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("sub/other.txt")).unwrap(),
+        "world\n",
+        "the `.` in `./other.txt` is not a hidden directory"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("main.txt")).unwrap(),
+        "hello\n",
+        "the `..` in `../main.txt` is not a hidden directory"
+    );
+}
+
+#[test]
+fn test_config_exclude_applies_to_explicit_absolute_file() {
+    // Canonical: fini strips its cwd from an absolute argument, and on macOS
+    // the temp dir is reached through the `/var -> /private/var` symlink.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    // A slash in the middle anchors the pattern to the cwd, so this only
+    // matches once the absolute argument is made relative to it.
+    fs::write(root.join("fini.toml"), "exclude = [\"tests/fixtures/\"]\n").unwrap();
+    fs::create_dir_all(root.join("tests/fixtures")).unwrap();
+    fs::create_dir_all(root.join("other/tests/fixtures")).unwrap();
+    let excluded = root.join("tests/fixtures/sample.txt");
+    let not_anchored = root.join("other/tests/fixtures/sample.txt");
+    fs::write(&excluded, "world").unwrap();
+    fs::write(&not_anchored, "hello").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(&root)
+        .arg(&excluded)
+        .arg(&not_anchored)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(&excluded).unwrap(), "world");
+    assert_eq!(fs::read_to_string(&not_anchored).unwrap(), "hello\n");
+}
+
+#[test]
+fn test_check_exits_zero_when_only_explicit_file_is_excluded() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("skip.min.js"), "trailing \n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "--exclude", "*.min.js", "skip.min.js"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "a run whose only target was excluded must say it scanned nothing: {stderr:?}"
+    );
+}
+
 // ===========================================
 // Inline Ignore Directives
 // ===========================================
