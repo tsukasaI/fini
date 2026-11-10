@@ -133,7 +133,7 @@ fini reads `.editorconfig` and warns if settings conflict with its fixed behavio
 | Trailing whitespace | Remove trailing spaces and tabs | On |
 | Full-width spaces | Fix U+3000 to regular space (with warning) | On |
 | Leading blank lines | Remove blank lines at file start | On |
-| Zero-width characters | Remove ZWSP, ZWJ, ZWNJ, etc. (preserve BOM at start) | On |
+| Zero-width characters | Remove ZWSP (U+200B), word joiner (U+2060) and a BOM past the file start. ZWJ, ZWNJ and directional marks are kept: emoji sequences and some scripts need them | On |
 | Consecutive blank lines | Limit to N blank lines (`--max-blank-lines`) | Off |
 | Code block remnants | Remove ``` markers (`--fix-code-blocks`) | Off |
 

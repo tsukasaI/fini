@@ -2,12 +2,12 @@ use super::{Problem, ProblemKind};
 
 const FULLWIDTH_SPACE: char = '\u{3000}';
 
+// Not ZWNJ/ZWJ (U+200C/U+200D) or the directional marks (U+200E/U+200F),
+// invisible as they are: emoji sequences, Persian and Indic spelling, and
+// mixed-direction text depend on them, so removing them changes what the
+// file says (issue #265).
 pub(super) const ZERO_WIDTH_CHARS: &[char] = &[
     '\u{200B}', // Zero Width Space (ZWSP)
-    '\u{200C}', // Zero Width Non-Joiner (ZWNJ)
-    '\u{200D}', // Zero Width Joiner (ZWJ)
-    '\u{200E}', // Left-to-Right Mark
-    '\u{200F}', // Right-to-Left Mark
     '\u{2060}', // Word Joiner
     '\u{FEFF}', // Byte Order Mark (BOM) - removed except at file start
 ];

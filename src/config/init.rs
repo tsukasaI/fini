@@ -31,8 +31,10 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # Set to 0 to remove all blank lines, or comment out for no limit.
 # max_blank_lines = 2
 
-# Remove zero-width characters (ZWSP, ZWJ, ZWNJ, etc.)
+# Remove zero-width characters (ZWSP, word joiner, a BOM past the file start).
 # Useful for cleaning up text copied from web pages or word processors.
+# ZWJ, ZWNJ and directional marks are always kept: emoji sequences and some
+# scripts need them.
 # Default: true
 # remove_zero_width = true
 
