@@ -28,6 +28,14 @@ pub fn walk_paths(
     // with many files pays that syscall once, not once per file.
     let mut canon_parent_cache = HashMap::new();
 
+    // Not the per-argument matcher built below: that one is rooted at the
+    // argument, which for a file argument leaves no directory to match
+    // `vendor/` against. "." keeps `ignore` from stripping anything, so
+    // patterns apply to the path as `is_excluded_file_argument` hands it over.
+    let user_patterns: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
+    let file_argument_excludes = build_excludes(Path::new("."), &user_patterns)?;
+    let cwd = std::env::current_dir().ok();
+
     for path in paths {
         // A root path argument that is itself a symlink to a directory is
         // followed by WalkBuilder before any per-entry policy (hidden files,
@@ -61,6 +69,14 @@ pub fn walk_paths(
             continue;
         }
 
+        if is_excluded_file_argument(
+            Path::new(path),
+            cwd.as_deref(),
+            file_argument_excludes.as_ref(),
+        ) {
+            continue;
+        }
+
         let mut builder = WalkBuilder::new(path);
         builder
             // Hidden files (dotfiles) are where secrets land most often
@@ -91,23 +107,10 @@ pub fn walk_paths(
             patterns.push(".git");
         }
 
-        let overrides_built = if patterns.is_empty() {
-            None
-        } else {
-            let mut overrides = OverrideBuilder::new(path);
-            for pattern in &patterns {
-                // OverrideBuilder uses inverted ! semantics:
-                // !pattern = exclude, pattern = whitelist
-                overrides.add(&format!("!{pattern}")).map_err(|e| {
-                    io::Error::other(format!("invalid exclude pattern '{pattern}': {e}"))
-                })?;
-            }
-            let built = overrides
-                .build()
-                .map_err(|e| io::Error::other(format!("failed to build exclude patterns: {e}")))?;
+        let overrides_built = build_excludes(Path::new(path), &patterns)?;
+        if let Some(built) = &overrides_built {
             builder.overrides(built.clone());
-            Some(built)
-        };
+        }
 
         for entry in builder.build() {
             match entry {
@@ -150,6 +153,57 @@ pub fn walk_paths(
     }
 
     Ok(all_files)
+}
+
+fn build_excludes(root: &Path, patterns: &[&str]) -> io::Result<Option<Override>> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let mut overrides = OverrideBuilder::new(root);
+    for pattern in patterns {
+        // OverrideBuilder uses inverted ! semantics:
+        // !pattern = exclude, pattern = whitelist
+        overrides
+            .add(&format!("!{pattern}"))
+            .map_err(|e| io::Error::other(format!("invalid exclude pattern '{pattern}': {e}")))?;
+    }
+    overrides
+        .build()
+        .map(Some)
+        .map_err(|e| io::Error::other(format!("failed to build exclude patterns: {e}")))
+}
+
+/// True if `path` names an existing non-directory that a user exclude
+/// pattern matches, either directly or through one of its directories.
+///
+/// The walk can't answer this: `ignore` yields a root argument without
+/// consulting overrides, so a file passed by name (pre-commit, an editor
+/// hook) would otherwise bypass `--exclude`/config excludes (issue #264).
+///
+/// An absolute path under `cwd` is matched relative to it, the same way
+/// `fini .` sees the file, so a pattern anchored by a slash
+/// (`tests/fixtures/`) behaves the same on both routes. Anything else is
+/// matched as typed.
+fn is_excluded_file_argument(path: &Path, cwd: Option<&Path>, excludes: Option<&Override>) -> bool {
+    if excludes.is_none() {
+        return false;
+    }
+    // Not skipped when missing: a path that doesn't exist must still reach
+    // the walk and be reported as an error, excluded pattern or not.
+    if !fs::metadata(path).is_ok_and(|m| !m.is_dir()) {
+        return false;
+    }
+    let relative = cwd
+        .and_then(|cwd| path.strip_prefix(cwd).ok())
+        .unwrap_or(path);
+    is_override_ignored(excludes, relative, false)
+        || relative
+            .ancestors()
+            .skip(1)
+            // Not every ancestor: `.`, `..`, `/` and the empty tail name no
+            // directory, yet `.` and `..` would match a pattern like `.*`.
+            .filter(|dir| dir.file_name().is_some())
+            .any(|dir| is_override_ignored(excludes, dir, true))
 }
 
 /// Mirrors `builder.hidden(!include_hidden)`: any dotfile/dotdir component.
@@ -748,6 +802,50 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         assert!(files[0].to_string_lossy().contains("app.js"));
+    }
+
+    #[test]
+    fn test_exclude_applies_to_explicit_file() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("vendor")).unwrap();
+        let kept = dir.path().join("main.rs");
+        let minified = dir.path().join("style.min.js");
+        let vendored = dir.path().join("vendor/lib.js");
+        // A file, so the directory-only pattern `vendor/` must not match it.
+        let file_named_like_dir = dir.path().join("sub/vendor");
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        for file in [&kept, &minified, &vendored, &file_named_like_dir] {
+            fs::write(file, "content").unwrap();
+        }
+
+        let paths: Vec<String> = [&kept, &minified, &vendored, &file_named_like_dir]
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let exclude = vec!["*.min.js".to_string(), "vendor/".to_string()];
+        let files: Vec<PathBuf> = walk_paths(&paths, &exclude, false)
+            .unwrap()
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(files, vec![kept, file_named_like_dir]);
+    }
+
+    #[test]
+    fn test_excluded_missing_file_is_still_an_error() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("gone.min.js");
+
+        let paths = vec![missing.to_string_lossy().to_string()];
+        let exclude = vec!["*.min.js".to_string()];
+        let results = walk_paths(&paths, &exclude, false).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].is_err(),
+            "a path that does not exist must be reported, not hidden by an exclude: {results:?}"
+        );
     }
 
     #[test]

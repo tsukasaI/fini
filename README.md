@@ -105,6 +105,11 @@ remove_leading_blanks = true
 fix_code_blocks = false    # Remove ``` markers
 ```
 
+Exclude patterns (`exclude` here, or `--exclude`) also apply to files passed
+by name, as pre-commit and editor hooks do: `fini vendor/lib.js` skips the
+file when `vendor/` is excluded. Such a path is matched relative to the
+current directory.
+
 ### Priority
 
 CLI arguments > `fini.toml` > defaults
