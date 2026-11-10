@@ -30,8 +30,9 @@ pub fn walk_paths(
 
     // Not the per-argument matcher built below: that one is rooted at the
     // argument, which for a file argument leaves no directory to match
-    // `vendor/` against. "." keeps `ignore` from stripping anything, so
-    // patterns apply to the path as `is_excluded_file_argument` hands it over.
+    // `vendor/` against. "." disables `ignore`'s root-prefix stripping (it
+    // still drops one leading "./"), so patterns apply to the path as
+    // `is_excluded_file_argument` hands it over.
     let user_patterns: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
     let file_argument_excludes = build_excludes(Path::new("."), &user_patterns)?;
     let cwd = std::env::current_dir().ok();
