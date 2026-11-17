@@ -789,6 +789,72 @@ mod tests {
         );
     }
 
+    // issue #277
+    #[test]
+    fn test_markers_split_by_kept_invisible_characters_are_still_detected() {
+        let input = "// TO\u{200D}DO: remove\nconsole\u{200C}.log(token);\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.content, input);
+        let lines_of = |want: fn(&ProblemKind) -> bool| -> Vec<usize> {
+            result
+                .problems
+                .iter()
+                .filter(|p| want(&p.kind))
+                .map(|p| p.line)
+                .collect()
+        };
+        assert_eq!(
+            lines_of(|k| matches!(k, ProblemKind::TodoComment)),
+            [1],
+            "{:?}",
+            result.problems
+        );
+        assert_eq!(
+            lines_of(|k| matches!(k, ProblemKind::DebugCode { .. })),
+            [2],
+            "{:?}",
+            result.problems
+        );
+    }
+
+    #[test]
+    fn test_marker_found_only_after_stripping_is_still_suppressible() {
+        let input = "// TO\u{200D}DO: x fini:ignore todo\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        let is_todo = |p: &&Problem| matches!(p.kind, ProblemKind::TodoComment);
+        assert_eq!(
+            result.problems.iter().filter(is_todo).count(),
+            0,
+            "{:?}",
+            result.problems
+        );
+        assert_eq!(
+            result.suppressed.iter().filter(is_todo).count(),
+            1,
+            "{:?}",
+            result.suppressed
+        );
+    }
+
+    #[test]
+    fn test_marker_split_by_kept_zwsp_is_detected() {
+        let config = NormalizeConfig {
+            remove_zero_width: false,
+            ..NormalizeConfig::default()
+        };
+        let input = "// TO\u{200B}DO: x\n";
+        let result = normalize_content(input, &config);
+        assert_eq!(result.content, input);
+        assert!(
+            result
+                .problems
+                .iter()
+                .any(|p| matches!(p.kind, ProblemKind::TodoComment)),
+            "{:?}",
+            result.problems
+        );
+    }
+
     #[test]
     fn test_remove_word_joiner() {
         let input = "a\u{2060}b\n";
