@@ -105,10 +105,16 @@ remove_leading_blanks = true
 fix_code_blocks = false    # Remove ``` markers
 ```
 
-Exclude patterns (`exclude` here, or `--exclude`) also apply to files passed
-by name, as pre-commit and editor hooks do: `fini vendor/lib.js` skips the
-file when `vendor/` is excluded. Such a path is matched relative to the
-current directory.
+Exclude patterns (`exclude` here, or `--exclude`) are matched relative to the
+current directory, whatever the argument: with `src/gen/` excluded, `fini .`,
+`fini src` and `fini src/gen/a.rs` all skip `src/gen/a.rs`. This includes
+files passed by name, as pre-commit and editor hooks do, and a directory
+argument that is itself excluded (`fini vendor` with `vendor/` excluded scans
+nothing). Symlinks and `..` in an argument are resolved before matching.
+
+An argument outside the current directory is matched relative to itself
+instead: patterns still apply to what is found under a directory argument,
+but a file passed by name from outside is always scanned.
 
 ### Priority
 
