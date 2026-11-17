@@ -1164,6 +1164,53 @@ fn test_issue_273_file_outside_cwd_is_scanned_despite_matching_directory_name() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn test_file_behind_symlinked_directory_leaving_cwd_stays_excluded() {
+    let base = TempDir::new().unwrap();
+    fs::create_dir(base.path().join("proj")).unwrap();
+    fs::create_dir(base.path().join("big")).unwrap();
+    let target = base.path().join("big/x.csv");
+    fs::write(&target, "a,b").unwrap();
+    std::os::unix::fs::symlink("../big", base.path().join("proj/data")).unwrap();
+
+    let output = fini_cmd()
+        .current_dir(base.path().join("proj"))
+        .args(["--exclude", "data/", "data/x.csv"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "a,b",
+        "data/ must keep a file reached through the data symlink from being rewritten"
+    );
+}
+
+#[test]
+fn test_file_outside_cwd_is_excluded_by_a_file_name_pattern() {
+    let base = TempDir::new().unwrap();
+    fs::create_dir(base.path().join("proj")).unwrap();
+    fs::create_dir(base.path().join("other")).unwrap();
+    let outside = base.path().join("other/golden.snap");
+    fs::write(&outside, "world").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(base.path().join("proj"))
+        .args(["--exclude", "*.snap", "../other/golden.snap"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "world");
+}
+
 #[test]
 fn test_issue_275_exclude_is_anchored_at_cwd_for_a_directory_argument() {
     let dir = TempDir::new().unwrap();

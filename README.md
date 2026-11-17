@@ -110,11 +110,15 @@ current directory, whatever the argument: with `src/gen/` excluded, `fini .`,
 `fini src` and `fini src/gen/a.rs` all skip `src/gen/a.rs`. This includes
 files passed by name, as pre-commit and editor hooks do, and a directory
 argument that is itself excluded (`fini vendor` with `vendor/` excluded scans
-nothing). Symlinks and `..` in an argument are resolved before matching.
+nothing). Symlinked directories and `..` in an argument are resolved before
+matching; a symlink as the last component is matched by its own location. If
+a symlinked directory leads outside the current directory, the path is
+matched as typed instead, so `data/x.csv` is still excluded by `data/`.
 
 An argument outside the current directory is matched relative to itself
-instead: patterns still apply to what is found under a directory argument,
-but a file passed by name from outside is always scanned.
+instead: patterns apply to what is found under a directory argument, and a
+file passed by name is matched by its file name only (`*.snap` applies,
+`vendor/` does not).
 
 ### Priority
 

@@ -10,7 +10,8 @@ use std::process::Command;
 ///
 /// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js")
 /// and are matched relative to the current directory for every argument
-/// inside it; an argument outside it anchors them at itself.
+/// inside it; an argument outside it anchors them at itself (a file
+/// argument, at its directory).
 ///
 /// Returns `Err` immediately for fatal configuration errors (e.g. an invalid exclude
 /// pattern) so callers can fail closed instead of silently walking with no excludes.
@@ -211,6 +212,9 @@ fn build_excludes(patterns: &[&str]) -> io::Result<Option<Override>> {
 ///
 /// The final component stays unresolved (`dedup_key`): a symlink is matched
 /// by where the link sits, not by where it points.
+///
+/// The typed path is the fallback only when resolving leads out of the cwd
+/// (see `typed_below_cwd`).
 fn cwd_relative(
     argument: &Path,
     canonical_cwd: &Path,
@@ -227,12 +231,38 @@ fn cwd_relative(
         .strip_prefix(canonical_cwd)
         .ok()
         .map(Path::to_path_buf)
+        .or_else(|| typed_below_cwd(argument, canonical_cwd))
 }
 
-/// True if a user exclude pattern matches an existing argument or one of
-/// its directories below the cwd. `anchored_root` is `cwd_relative`'s
-/// answer, empty for the cwd itself and for an argument outside it, which
-/// is therefore never excluded: nothing above it is part of the scan.
+/// `argument` as typed, relative to the cwd, when its text alone places it
+/// below the cwd: no `..`, and either relative or starting with
+/// `canonical_cwd`.
+///
+/// For a path through a symlinked directory that leads out of the cwd
+/// (`data -> /mnt/data`, then `data/x.csv`). A walk never descends such a
+/// link, so an exclude written against the typed path (`data/`) is all that
+/// keeps the file from being rewritten. Without `..`, no directory above
+/// the cwd can take part in the match, which is what #273 was about.
+fn typed_below_cwd(argument: &Path, canonical_cwd: &Path) -> Option<PathBuf> {
+    let relative = if argument.is_absolute() {
+        argument.strip_prefix(canonical_cwd).ok()?
+    } else {
+        argument
+    };
+    let mut below_cwd = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => below_cwd.push(name),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(below_cwd)
+}
+
+/// True if a user exclude pattern matches an existing argument.
+/// `anchored_root` is `cwd_relative`'s answer: for an argument below the
+/// cwd, the argument and each directory between it and the cwd are tested.
 ///
 /// The walk can't answer this: `ignore` yields a root argument without
 /// consulting any filter, so a file passed by name (pre-commit, an editor
@@ -251,6 +281,16 @@ fn is_excluded_argument(
         return false;
     };
     let mut is_dir = metadata.is_dir();
+    if anchored_root.as_os_str().is_empty() {
+        // The cwd itself, or an argument outside it. Not its directories:
+        // nothing above it is part of the scan (issue #273). A file still
+        // has its own name, which is what a walk of its directory would
+        // match it by, so `*.snap` applies to it and `vendor/` cannot.
+        return !is_dir
+            && argument
+                .file_name()
+                .is_some_and(|name| excludes.matched(Path::new(name), false).is_ignore());
+    }
     for path in anchored_root.ancestors() {
         if path.as_os_str().is_empty() {
             break;
@@ -947,19 +987,111 @@ mod tests {
     }
 
     #[test]
-    fn test_issue_273_file_argument_outside_cwd_is_not_excluded() {
+    fn test_issue_273_file_argument_outside_cwd_is_matched_by_name_only() {
         let base = TempDir::new().unwrap();
         let cwd = base.path().join("proj");
         fs::create_dir(&cwd).unwrap();
         let outside = base.path().join("vendor/lib.js");
         write_file(&outside);
 
-        let files = walk_files_from(&cwd, &[&outside], &["vendor/", "*.js"]);
+        let files = walk_files_from(&cwd, &[&outside], &["vendor/", "/vendor/lib.js"]);
+        assert_eq!(
+            files,
+            vec![outside.clone()],
+            "no directory above an argument outside the cwd is part of the scan"
+        );
+
+        let files = walk_files_from(&cwd, &[&outside], &["*.js"]);
+        assert!(
+            files.is_empty(),
+            "a file-name pattern applies wherever the file is, as it would under a directory argument: {files:?}"
+        );
+    }
+
+    #[test]
+    fn test_unresolved_cwd_anchors_patterns_at_the_argument() {
+        let dir = TempDir::new().unwrap();
+        let vendored = dir.path().join("vendor/lib.js");
+        let kept = dir.path().join("src/a.rs");
+        for file in [&vendored, &kept, &dir.path().join("src/gen/x.rs")] {
+            write_file(file);
+        }
+        let walk = |argument: &Path, exclude: &str| -> Vec<PathBuf> {
+            let paths = [argument.to_string_lossy().to_string()];
+            walk_paths_from(None, &paths, &[exclude.to_string()], false)
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.unwrap())
+                .collect()
+        };
+
+        assert_eq!(walk(&vendored, "vendor/"), vec![vendored.clone()]);
+        assert_eq!(walk(&dir.path().join("src"), "/gen/"), vec![kept]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_issue_273_symlinked_directory_component_is_resolved() {
+        let base = TempDir::new().unwrap();
+        let cwd = base.path().join("proj");
+        write_file(&cwd.join("tests/a.txt"));
+        write_file(&cwd.join("tests/fixtures/x.txt"));
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&cwd, &link).unwrap();
+
+        let files = walk_files_from(
+            &cwd,
+            &[&link.join("tests/fixtures/x.txt"), &link.join("tests")],
+            &["tests/fixtures/"],
+        );
 
         assert_eq!(
             files,
-            vec![outside],
-            "nothing above an argument outside the cwd is part of the scan, so no pattern applies"
+            vec![link.join("tests/a.txt")],
+            "link/tests is <cwd>/tests, so tests/fixtures/ must apply under it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_argument_is_matched_where_the_link_sits() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("vendor/lib.txt"));
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(dir.path().join("vendor/lib.txt"), &link).unwrap();
+
+        let files = walk_files_from(dir.path(), &[&link], &["vendor/"]);
+
+        assert_eq!(
+            files,
+            vec![link],
+            "the link is not under vendor/; only its target is"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_file_under_symlinked_directory_leaving_cwd_is_matched_as_typed() {
+        let base = TempDir::new().unwrap();
+        // Canonical, so the absolute arguments below start with the cwd as
+        // fini resolves it (macOS reaches the temp dir through a symlink).
+        let cwd = base.path().canonicalize().unwrap().join("proj");
+        fs::create_dir(&cwd).unwrap();
+        write_file(&base.path().join("big/x.csv"));
+        std::os::unix::fs::symlink(base.path().join("big"), cwd.join("data")).unwrap();
+        let through_link = cwd.join("data/x.csv");
+
+        let files = walk_files_from(&cwd, &[&through_link], &["data/"]);
+        assert!(
+            files.is_empty(),
+            "data/ is the only thing keeping a file behind the link from being rewritten: {files:?}"
+        );
+
+        let files = walk_files_from(&cwd, &[&through_link], &["big/"]);
+        assert_eq!(
+            files,
+            vec![through_link],
+            "big/ is outside the cwd and not in the typed path"
         );
     }
 
