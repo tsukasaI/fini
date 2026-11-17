@@ -789,6 +789,34 @@ mod tests {
         );
     }
 
+    // issue #277
+    #[test]
+    fn test_markers_split_by_kept_invisible_characters_are_still_detected() {
+        let input = "// TO\u{200D}DO: remove\nconsole\u{200C}.log(token);\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.content, input);
+        let lines_of = |want: fn(&ProblemKind) -> bool| -> Vec<usize> {
+            result
+                .problems
+                .iter()
+                .filter(|p| want(&p.kind))
+                .map(|p| p.line)
+                .collect()
+        };
+        assert_eq!(
+            lines_of(|k| matches!(k, ProblemKind::TodoComment)),
+            [1],
+            "{:?}",
+            result.problems
+        );
+        assert_eq!(
+            lines_of(|k| matches!(k, ProblemKind::DebugCode { .. })),
+            [2],
+            "{:?}",
+            result.problems
+        );
+    }
+
     #[test]
     fn test_remove_word_joiner() {
         let input = "a\u{2060}b\n";

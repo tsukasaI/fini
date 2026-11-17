@@ -118,13 +118,20 @@ pub(super) fn detect_todo_and_fixme_comments(
         // Text after a fini:ignore directive is kind-list syntax, not code;
         // never scan it for markers (issue #95).
         let line = super::ignore::directive_start(line).map_or(line, |pos| &line[..pos]);
-        if is_valid_marker(line, "TODO") {
+        // Not the raw line alone: the fixer keeps ZWJ/ZWNJ/LRM/RLM, and one
+        // of them inside or right after a marker would hide it (issue #277).
+        let stripped = strip_mask_ignorable(line);
+        let has_marker = |marker: &str| {
+            is_valid_marker(line, marker)
+                || matches!(&stripped, Cow::Owned(s) if is_valid_marker(s, marker))
+        };
+        if has_marker("TODO") {
             todos.push(Problem {
                 line: line_map[line_idx],
                 kind: ProblemKind::TodoComment,
             });
         }
-        if is_valid_marker(line, "FIXME") {
+        if has_marker("FIXME") {
             fixmes.push(Problem {
                 line: line_map[line_idx],
                 kind: ProblemKind::FixmeComment,
@@ -166,10 +173,15 @@ pub(super) fn detect_debug_code(
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
+            // Raw or stripped, for the same reason as the marker scan above.
+            let stripped = strip_mask_ignorable(line);
             DEBUG_PATTERNS
                 .iter()
                 .chain(extra.iter())
-                .find(|p| contains_word_boundary(line, p))
+                .find(|p| {
+                    contains_word_boundary(line, p)
+                        || matches!(&stripped, Cow::Owned(s) if contains_word_boundary(s, p))
+                })
                 .map(|pattern| Problem {
                     line: line_map[line_idx],
                     kind: ProblemKind::DebugCode {
@@ -402,6 +414,44 @@ mod tests {
         let content = "// TODO: x fini:ignore todo\n";
         let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
         assert_eq!(todos.len(), 1);
+    }
+
+    // issue #277: the fixer keeps ZWJ/ZWNJ/LRM/RLM, so a marker one of them
+    // splits, or separates from its `:`, must still be found.
+    #[test]
+    fn test_issue_277_marker_split_by_invisible_character() {
+        for content in ["// TO\u{200D}DO: remove\n", "// TODO\u{200C}: remove\n"] {
+            let (todos, fixmes) =
+                detect_todo_and_fixme_comments(content, &identity_line_map(content));
+            assert_eq!(todos.len(), 1, "TODO not found in {content:?}");
+            assert!(fixmes.is_empty(), "unexpected FIXME in {content:?}");
+        }
+
+        let content = "# FIX\u{200E}ME later\n";
+        let (todos, fixmes) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
+        assert!(todos.is_empty());
+        assert_eq!(fixmes.len(), 1);
+    }
+
+    #[test]
+    fn test_issue_277_directive_kind_list_stays_unscanned_when_split() {
+        let content = "// fini:ignore-next-line to\u{200D}do\n";
+        let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
+        assert!(
+            todos.is_empty(),
+            "kind-list text is not code, with or without invisible characters"
+        );
+    }
+
+    #[test]
+    fn test_issue_277_debug_pattern_split_by_invisible_character() {
+        let content = "console\u{200C}.log(token);\n";
+        let problems = detect_debug_code(content, false, &identity_line_map(content));
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            &problems[0].kind,
+            ProblemKind::DebugCode { pattern } if *pattern == "console.log"
+        ));
     }
 
     #[test]
