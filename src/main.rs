@@ -259,7 +259,8 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
 
     let result = normalize_content(&input, normalize);
 
-    // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
+    // Suppressed secret and bidi-control detections keep an stderr audit
+    // trail in stdin mode too (issue #46)
     warn_suppressed_security_detections("stdin", &result.suppressed);
     // Advisory only: --quiet silences it, unlike the audit trail above.
     if result.ignores_only_fix_kinds && !cli.quiet {

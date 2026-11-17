@@ -45,7 +45,8 @@ pub struct NormalizeSection {
     /// Detect secret patterns (default: true)
     pub detect_secrets: Option<bool>,
 
-    /// Detect bidirectional override/isolate controls (default: true)
+    /// Detect bidirectional embedding, override and isolate controls
+    /// (default: true)
     pub detect_bidi: Option<bool>,
 
     /// Maximum line length (None = disabled)

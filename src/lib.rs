@@ -405,8 +405,8 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
 }
 
 /// Count suppressed problems and leave an stderr audit trail for suppressed
-/// secrets — even in --quiet mode — so `fini:ignore secret` can be reviewed,
-/// not just trusted (issue #46).
+/// secret and bidi-control detections — even in --quiet mode — so a
+/// `fini:ignore` that hides one can be reviewed, not just trusted (issue #46).
 fn record_suppressed(path: &Path, suppressed: &[Problem], result: &mut RunResult) {
     result.suppressed += suppressed.len();
     result.suppressed_secrets +=

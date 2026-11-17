@@ -67,7 +67,7 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # Default: true
 # detect_secrets = true
 
-# Detect bidirectional override and isolate control characters
+# Detect bidirectional embedding, override and isolate control characters
 # (U+202A-U+202E, U+2066-U+2069), which can make text display in a
 # different order than it is stored ("Trojan Source").
 # Default: true

@@ -29,7 +29,8 @@ pub struct NormalizeConfig {
     pub strict_debug: bool,
     /// Detects patterns like API keys
     pub detect_secrets: bool,
-    /// Detects bidirectional override/isolate controls ("Trojan Source")
+    /// Detects bidirectional embedding, override and isolate controls
+    /// ("Trojan Source")
     pub detect_bidi: bool,
     /// None = disabled
     pub max_line_length: Option<usize>,

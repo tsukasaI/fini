@@ -184,8 +184,7 @@ counted as a detection.
 
 Suppressions are counted in the run summary. Suppressed `secret` and `bidi`
 detections are always reported on stderr with `file:line` (even with
-`--quiet`) so they remain
-auditable.
+`--quiet`) so they remain auditable.
 
 ## Secret detection and output
 

@@ -3996,3 +3996,60 @@ fn test_issue_279_suppressed_bidi_control_leaves_audit_trail() {
         "missing stderr audit trail: {stderr:?}"
     );
 }
+
+#[test]
+fn test_issue_279_bare_ignore_in_stdin_mode_leaves_audit_trail() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = fini_cmd()
+        .args(["--stdin", "--check", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all("x = \"\u{2067}a\u{2069}\"; // fini:ignore\n".as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stdin:1 bidirectional control character suppressed by fini:ignore"),
+        "a directive naming no kind must leave the trail too: {stderr:?}"
+    );
+}
+
+#[test]
+fn test_issue_279_ignore_next_line_is_audited_and_not_counted_as_a_secret() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("rtl.js");
+    fs::write(&file, "// fini:ignore-next-line\nx = \"\u{202E}\"\n").unwrap();
+
+    let output = fini_cmd()
+        .args(["--check", "--no-color"])
+        .arg(&file)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rtl.js:2 bidirectional control character suppressed by fini:ignore"),
+        "{stderr:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 problems suppressed by fini:ignore"),
+        "{stdout:?}"
+    );
+    assert!(
+        !stdout.contains("secrets)"),
+        "a bidi control is not a secret: {stdout:?}"
+    );
+}
