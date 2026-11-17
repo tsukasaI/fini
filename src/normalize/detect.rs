@@ -118,8 +118,9 @@ pub(super) fn detect_todo_and_fixme_comments(
         // Text after a fini:ignore directive is kind-list syntax, not code;
         // never scan it for markers (issue #95).
         let line = super::ignore::directive_start(line).map_or(line, |pos| &line[..pos]);
-        // Not the raw line alone: the fixer keeps ZWJ/ZWNJ/LRM/RLM, and one
-        // of them inside or right after a marker would hide it (issue #277).
+        // Not the raw line alone: an invisible character (e.g. the ZWJ/ZWNJ/
+        // LRM/RLM the fixer keeps) inside or right after a marker would hide
+        // it (issue #277).
         let stripped = strip_mask_ignorable(line);
         let has_marker = |marker: &str| {
             is_valid_marker(line, marker)
@@ -236,7 +237,8 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
 
 /// Default_Ignorable_Code_Point members plus control characters (C0 except
 /// `\t\n\r`, DEL, C1, U+2028/U+2029) that render as nothing or as blank, so
-/// they can split a secret invisibly. A superset of `fix::ZERO_WIDTH_CHARS`
+/// they can split a secret, a TODO/FIXME marker or a debug pattern
+/// invisibly. A superset of `fix::ZERO_WIDTH_CHARS`
 /// (enforced by a test). Stripping can switch a match off (U+000B/000C/0085/
 /// 2028/2029 are regex `\s`, which `bearer\s+` needs), so callers match the
 /// raw line as well as the stripped one: stripping can only add matches. Not
@@ -440,6 +442,37 @@ mod tests {
         assert!(
             todos.is_empty(),
             "kind-list text is not code, with or without invisible characters"
+        );
+    }
+
+    // A directive split by an invisible character is not a directive: its
+    // text is neither cut off nor honoured, so a marker on the line is
+    // reported. Failing closed is the point; these pin it.
+    #[test]
+    fn test_issue_277_split_directive_does_not_hide_a_marker() {
+        for content in [
+            "// fini:ig\u{200D}nore to\u{200D}do\n",
+            "// TO\u{200D}DO: x fini:ig\u{200D}nore\n",
+        ] {
+            let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
+            assert_eq!(todos.len(), 1, "TODO not reported in {content:?}");
+        }
+    }
+
+    #[test]
+    fn test_issue_277_marker_followed_by_right_to_left_mark() {
+        let content = "# FIXME\u{200F}: later\n";
+        let (_, fixmes) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
+        assert_eq!(fixmes.len(), 1);
+    }
+
+    #[test]
+    fn test_issue_277_strict_debug_pattern_split_by_invisible_character() {
+        let content = "console\u{200C}.error(token);\n";
+        assert!(detect_debug_code(content, false, &identity_line_map(content)).is_empty());
+        assert_eq!(
+            detect_debug_code(content, true, &identity_line_map(content)).len(),
+            1
         );
     }
 
