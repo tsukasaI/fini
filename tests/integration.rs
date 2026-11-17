@@ -3893,3 +3893,106 @@ fn test_issue_225_tracked_gitignored_rescue_survives_inherited_git_env() {
         "tracked-but-gitignored TODO not reported: {stdout:?} {stderr:?}"
     );
 }
+
+// ===========================================
+// Bidirectional control characters (issue #279)
+// ===========================================
+
+/// An override plus isolates, as in a "Trojan Source" line.
+const BIDI_LINE: &str = "if (role == \"user\u{202E} \u{2066}// admin\u{2069} \u{2066}\") {}\n";
+
+#[test]
+fn test_issue_279_check_reports_bidi_control_and_fix_mode_leaves_it() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("auth.js");
+    fs::write(&file, BIDI_LINE).unwrap();
+
+    let check = fini_cmd().arg("--check").arg(&file).output().unwrap();
+    assert_eq!(check.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        stdout.contains("bidirectional control character at line 1"),
+        "{stdout:?}"
+    );
+
+    let fix = fini_cmd().arg(&file).output().unwrap();
+    assert_eq!(
+        fix.status.code(),
+        Some(0),
+        "fix mode never fails on a detection"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), BIDI_LINE);
+}
+
+#[test]
+fn test_issue_279_no_detect_bidi_flag() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("auth.js");
+    fs::write(&file, BIDI_LINE).unwrap();
+
+    let output = fini_cmd()
+        .args(["--check", "--no-detect-bidi"])
+        .arg(&file)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).is_empty(),
+        "the CLI flag is the user's own choice and needs no warning"
+    );
+}
+
+#[test]
+fn test_issue_279_config_disable_warns_even_when_quiet() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\ndetect_bidi = false\n",
+    )
+    .unwrap();
+    let file = dir.path().join("auth.js");
+    fs::write(&file, BIDI_LINE).unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "--quiet", "auth.js"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("disables bidirectional control detection"),
+        "missing security-posture warning: {stderr:?}"
+    );
+}
+
+#[test]
+fn test_issue_279_suppressed_bidi_control_leaves_audit_trail() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("rtl.js");
+    fs::write(
+        &file,
+        "const label = \"\u{2067}text\u{2069}\"; // fini:ignore bidi\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .args(["--check", "--quiet"])
+        .arg(&file)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "suppression must still work");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rtl.js:1 bidirectional control character suppressed by fini:ignore"),
+        "missing stderr audit trail: {stderr:?}"
+    );
+}

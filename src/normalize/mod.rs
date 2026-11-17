@@ -3,7 +3,8 @@ mod fix;
 mod ignore;
 
 use detect::{
-    check_line_length, detect_debug_code, detect_secret_patterns, detect_todo_and_fixme_comments,
+    check_line_length, detect_bidi_controls, detect_debug_code, detect_secret_patterns,
+    detect_todo_and_fixme_comments,
 };
 use fix::{
     fix_fullwidth_spaces, limit_consecutive_blank_lines, normalize_eof_newline,
@@ -28,6 +29,8 @@ pub struct NormalizeConfig {
     pub strict_debug: bool,
     /// Detects patterns like API keys
     pub detect_secrets: bool,
+    /// Detects bidirectional override/isolate controls ("Trojan Source")
+    pub detect_bidi: bool,
     /// None = disabled
     pub max_line_length: Option<usize>,
     /// Files larger than this are skipped (like binary files) rather than
@@ -55,6 +58,7 @@ impl Default for NormalizeConfig {
             detect_debug: true,
             strict_debug: false,
             detect_secrets: true,
+            detect_bidi: true,
             max_line_length: None,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
         }
@@ -102,6 +106,7 @@ pub enum ProblemKind {
     DebugCode { pattern: &'static str },
     SecretPattern { hint: &'static str },
     LongLine { length: usize, limit: usize },
+    BidiControl,
 }
 
 /// Identifiers of fix-type kinds, which `fini:ignore` accepts syntactically
@@ -122,7 +127,7 @@ pub(crate) fn is_fix_kind_id(id: &str) -> bool {
 
 /// One-time stderr hint for a `fini:ignore` directive that names only fix
 /// kinds, which silently has no effect otherwise.
-pub const FIX_KIND_IGNORE_HINT: &str = "Hint: fini:ignore only suppresses detections (todo, fixme, debug, secret, line-length); fix kinds like 'fullwidth' cannot be suppressed";
+pub const FIX_KIND_IGNORE_HINT: &str = "Hint: fini:ignore only suppresses detections (todo, fixme, debug, secret, line-length, bidi); fix kinds like 'fullwidth' cannot be suppressed";
 
 /// `1..=n` over the lines of `content`: the line map before any fix has
 /// dropped or moved a line.
@@ -139,7 +144,8 @@ impl ProblemKind {
             | ProblemKind::FixmeComment
             | ProblemKind::DebugCode { .. }
             | ProblemKind::SecretPattern { .. }
-            | ProblemKind::LongLine { .. } => true,
+            | ProblemKind::LongLine { .. }
+            | ProblemKind::BidiControl => true,
             ProblemKind::FullWidthSpace
             | ProblemKind::LeadingBlankLines { .. }
             | ProblemKind::ZeroWidthCharacter
@@ -161,7 +167,8 @@ impl ProblemKind {
             | ProblemKind::FixmeComment
             | ProblemKind::DebugCode { .. }
             | ProblemKind::SecretPattern { .. }
-            | ProblemKind::LongLine { .. } => None,
+            | ProblemKind::LongLine { .. }
+            | ProblemKind::BidiControl => None,
         }
     }
 
@@ -175,6 +182,7 @@ impl ProblemKind {
             ProblemKind::DebugCode { .. } => Some("debug"),
             ProblemKind::SecretPattern { .. } => Some("secret"),
             ProblemKind::LongLine { .. } => Some("line-length"),
+            ProblemKind::BidiControl => Some("bidi"),
             ProblemKind::FullWidthSpace
             | ProblemKind::LeadingBlankLines { .. }
             | ProblemKind::ZeroWidthCharacter
@@ -261,6 +269,10 @@ pub fn normalize_content(content: &str, config: &NormalizeConfig) -> NormalizeRe
         problems.extend(detect_secret_patterns(&result, &line_map));
     }
 
+    if config.detect_bidi {
+        problems.extend(detect_bidi_controls(&result, &line_map));
+    }
+
     if let Some(max_length) = config.max_line_length {
         problems.extend(check_line_length(&result, max_length, &line_map));
     }
@@ -324,7 +336,8 @@ mod tests {
                     length: 100,
                     limit: 80,
                 }),
-                ProblemKind::LongLine { .. } => None,
+                ProblemKind::LongLine { .. } => Some(ProblemKind::BidiControl),
+                ProblemKind::BidiControl => None,
             }
         }
         let mut kinds = vec![ProblemKind::FullWidthSpace];
@@ -333,7 +346,7 @@ mod tests {
         }
         // Keep in sync with the last variant declared in `ProblemKind`.
         assert!(
-            matches!(kinds.last(), Some(ProblemKind::LongLine { .. })),
+            matches!(kinds.last(), Some(ProblemKind::BidiControl)),
             "walk must end at the last-declared ProblemKind variant"
         );
         kinds
@@ -815,6 +828,43 @@ mod tests {
             "{:?}",
             result.problems
         );
+    }
+
+    fn bidi_lines(problems: &[Problem]) -> Vec<usize> {
+        problems
+            .iter()
+            .filter(|p| p.kind == ProblemKind::BidiControl)
+            .map(|p| p.line)
+            .collect()
+    }
+
+    // issue #279
+    #[test]
+    fn test_bidi_control_is_reported_and_left_in_place() {
+        let input = "let role = \"\u{202E}user\";\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert_eq!(result.content, input, "a detection never rewrites the file");
+        assert!(!result.has_changes());
+        assert_eq!(bidi_lines(&result.problems), [1]);
+        assert!(result.has_detection_problems());
+    }
+
+    #[test]
+    fn test_bidi_detection_disabled() {
+        let config = NormalizeConfig {
+            detect_bidi: false,
+            ..NormalizeConfig::default()
+        };
+        let result = normalize_content("let role = \"\u{202E}user\";\n", &config);
+        assert!(result.problems.is_empty(), "{:?}", result.problems);
+    }
+
+    #[test]
+    fn test_ignore_bidi_suppresses_and_keeps_the_record() {
+        let input = "let role = \"\u{2066}user\u{2069}\"; // fini:ignore bidi\n";
+        let result = normalize_content(input, &NormalizeConfig::default());
+        assert!(bidi_lines(&result.problems).is_empty());
+        assert_eq!(bidi_lines(&result.suppressed), [1]);
     }
 
     #[test]

@@ -78,6 +78,7 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --no-detect-debug       Skip debug code detection
 --strict-debug          Include console.error/eprintln in debug code detection
 --no-detect-secrets     Skip secret pattern detection
+--no-detect-bidi        Skip bidirectional control character detection
 --max-line-length <N>   Maximum line length (warn if exceeded)
 --max-file-size <BYTES> Maximum file size in bytes; larger files are skipped
                         like binary files (default: 10 MiB). Set a very
@@ -171,7 +172,7 @@ API_KEY = "sk_test_example"
 | `fini:ignore-next-line` | Suppress all detections on the next line |
 | `fini:ignore-next-line secret` | Suppress only listed kinds on the next line |
 
-Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`
+Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `bidi`
 
 Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading blank lines, consecutive blank lines, code block remnants) are never suppressed, since the content changes regardless. Unrecognized or fix-type kinds have no effect; a directive naming only fix-type kinds (e.g. `fini:ignore fullwidth`) prints a one-time stderr hint per run, naming the first such file and how many more (not with `--quiet`). The hint only fires for files where fini finds at least one problem, because directives are not parsed in otherwise clean files.
 
@@ -181,8 +182,9 @@ Everything on a line from `fini:ignore`/`fini:ignore-next-line` onward is
 directive syntax, not code, so it's never scanned for TODO/FIXME markers or
 counted as a detection.
 
-Suppressions are counted in the run summary. Suppressed `secret` detections are
-always reported on stderr with `file:line` (even with `--quiet`) so they remain
+Suppressions are counted in the run summary. Suppressed `secret` and `bidi`
+detections are always reported on stderr with `file:line` (even with
+`--quiet`) so they remain
 auditable.
 
 ## Secret detection and output
@@ -204,6 +206,18 @@ an input yet; pass hidden paths explicitly via `files` instead
 (`files: '. .github'` - fini exits 2 on a path that doesn't exist, so only
 list paths you know are present, e.g. add `.env` only if it's tracked in
 your repo).
+
+## Bidirectional control characters
+
+A line holding a bidirectional embedding, override or isolate control
+(U+202A to U+202E, U+2066 to U+2069) is reported as a detection: these
+characters can make code display in a different order than it runs ("Trojan
+Source"). fini reports them and never removes them, because right-to-left
+text can use them legitimately.
+
+Suppress one line with `fini:ignore bidi`, or turn the detection off with
+`--no-detect-bidi` or `detect_bidi = false` in `fini.toml`. Turning it off
+from `fini.toml` prints a warning to stderr that `--quiet` does not suppress.
 
 ## Skipped
 

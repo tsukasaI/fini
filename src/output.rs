@@ -271,6 +271,13 @@ pub fn print_problems_to<W: Write>(w: &mut W, problems: &[Problem]) -> io::Resul
                     problem.line, length, limit
                 )?;
             }
+            ProblemKind::BidiControl => {
+                writeln!(
+                    w,
+                    "  - bidirectional control character at line {}",
+                    problem.line
+                )?;
+            }
         }
     }
     Ok(())
@@ -384,21 +391,31 @@ pub fn print_fix_result(
     }
 }
 
-/// Leaves an stderr audit trail for each secret detection suppressed by
-/// `fini:ignore`, and returns how many there were. `label` must already be
-/// safe to print as a line (see `safe_path_display`).
-pub fn warn_suppressed_secrets(label: &str, suppressed: &[Problem]) -> usize {
-    let mut count = 0;
+/// Leaves an stderr audit trail for each security detection (secret, bidi
+/// control) suppressed by `fini:ignore`, and returns how many of them were
+/// secrets. `label` must already be safe to print as a line (see
+/// `safe_path_display`).
+pub fn warn_suppressed_security_detections(label: &str, suppressed: &[Problem]) -> usize {
+    let mut secrets = 0;
     for problem in suppressed {
-        if let ProblemKind::SecretPattern { hint } = &problem.kind {
-            count += 1;
-            eprintln!(
-                "Warning: {}:{} potential secret ({hint}) suppressed by fini:ignore",
-                label, problem.line
-            );
+        match &problem.kind {
+            ProblemKind::SecretPattern { hint } => {
+                secrets += 1;
+                eprintln!(
+                    "Warning: {}:{} potential secret ({hint}) suppressed by fini:ignore",
+                    label, problem.line
+                );
+            }
+            ProblemKind::BidiControl => {
+                eprintln!(
+                    "Warning: {}:{} bidirectional control character suppressed by fini:ignore",
+                    label, problem.line
+                );
+            }
+            _ => {}
         }
     }
-    count
+    secrets
 }
 
 pub fn print_checked(path: &Path, ctx: &OutputContext) {

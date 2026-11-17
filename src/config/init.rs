@@ -67,6 +67,12 @@ pub const FINI_TOML_TEMPLATE: &str = r#"# fini.toml - Configuration for fini fil
 # Default: true
 # detect_secrets = true
 
+# Detect bidirectional override and isolate control characters
+# (U+202A-U+202E, U+2066-U+2069), which can make text display in a
+# different order than it is stored ("Trojan Source").
+# Default: true
+# detect_bidi = true
+
 # Maximum line length (warn if exceeded). Comment out to disable.
 # max_line_length = 120
 
@@ -183,6 +189,7 @@ mod tests {
         assert_eq!(config.normalize.detect_debug, Some(true));
         assert_eq!(config.normalize.strict_debug, Some(false));
         assert_eq!(config.normalize.detect_secrets, Some(true));
+        assert_eq!(config.normalize.detect_bidi, Some(true));
         assert_eq!(config.normalize.max_line_length, Some(120));
         assert_eq!(config.normalize.max_file_size, Some(10_485_760));
     }

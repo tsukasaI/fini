@@ -27,6 +27,8 @@ pub struct CliNormalizeOptions {
     pub strict_debug: Option<bool>,
     /// If Some(true), skip secret pattern detection
     pub no_detect_secrets: Option<bool>,
+    /// If Some(true), skip bidirectional control detection
+    pub no_detect_bidi: Option<bool>,
     /// Maximum line length
     pub max_line_length: Option<usize>,
     /// Maximum file size in bytes; larger files are skipped
@@ -83,6 +85,11 @@ pub fn merge_normalize_config(
             .map(|no| !no)
             .or_else(|| toml.and_then(|t| t.detect_secrets))
             .unwrap_or(defaults.detect_secrets),
+        detect_bidi: cli
+            .no_detect_bidi
+            .map(|no| !no)
+            .or_else(|| toml.and_then(|t| t.detect_bidi))
+            .unwrap_or(defaults.detect_bidi),
         max_line_length: cli
             .max_line_length
             .or_else(|| toml.and_then(|t| t.max_line_length))
@@ -167,6 +174,31 @@ mod tests {
         assert!(!config.remove_zero_width); // CLI (keep=true -> remove=false)
         assert!(!config.remove_leading_blanks); // TOML (CLI not set)
         assert!(!config.fix_code_blocks); // CLI wins
+    }
+
+    #[test]
+    fn test_merge_detect_bidi() {
+        let no_cli = CliNormalizeOptions::default();
+        assert!(merge_normalize_config(&no_cli, None).detect_bidi);
+
+        let toml_off = NormalizeSection {
+            detect_bidi: Some(false),
+            ..Default::default()
+        };
+        assert!(!merge_normalize_config(&no_cli, Some(&toml_off)).detect_bidi);
+
+        let cli_off = CliNormalizeOptions {
+            no_detect_bidi: Some(true),
+            ..Default::default()
+        };
+        let toml_on = NormalizeSection {
+            detect_bidi: Some(true),
+            ..Default::default()
+        };
+        assert!(
+            !merge_normalize_config(&cli_off, Some(&toml_on)).detect_bidi,
+            "CLI wins over fini.toml"
+        );
     }
 
     #[test]
