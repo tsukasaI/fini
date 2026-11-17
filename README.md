@@ -70,7 +70,7 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 --no-color              Disable colored output
 --no-progress           Hide progress bar
 --max-blank-lines <N>   Limit consecutive blank lines to N
---keep-zero-width       Keep zero-width characters (default: remove)
+--keep-zero-width       Keep ZWSP, word joiner and non-leading BOM (default: remove)
 --keep-leading-blanks   Keep leading blank lines (default: remove)
 --fix-code-blocks       Remove code block remnants (```lang markers)
 --no-detect-todos       Skip TODO comment detection

@@ -72,7 +72,7 @@ struct Cli {
     #[arg(long, value_name = "N")]
     max_blank_lines: Option<usize>,
 
-    /// Keep zero-width characters (default: remove)
+    /// Keep ZWSP, word joiner and non-leading BOM (default: remove)
     #[arg(long)]
     keep_zero_width: bool,
 
