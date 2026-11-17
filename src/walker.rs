@@ -51,6 +51,7 @@ fn walk_paths_from(
 ) -> io::Result<Walked> {
     let mut all_files = vec![];
     let mut excluded_arguments = vec![];
+    let mut seen_excluded = HashSet::new();
     // Overlapping path arguments (e.g. `fini src src/a.rs`) can walk the same
     // file more than once; dedup so it's only ever processed once (issue
     // #81). See `dedup_key` for the key used.
@@ -108,7 +109,13 @@ fn walk_paths_from(
             .and_then(|cwd| cwd_relative(root, cwd, &mut canon_parent_cache))
             .unwrap_or_default();
         if is_excluded_argument(root, &anchored_root, argument_excludes.as_ref()) {
-            excluded_arguments.push(root.to_path_buf());
+            // Not keyed on the typed text: `vendor`, `./vendor` and `vendor/`
+            // are one argument given three times, as for files (issue #81).
+            let location = canonical_location(root, &mut canon_parent_cache)
+                .unwrap_or_else(|| root.to_path_buf());
+            if seen_excluded.insert(location) {
+                excluded_arguments.push(root.to_path_buf());
+            }
             continue;
         }
         let excludes = AnchoredExcludes {
@@ -234,18 +241,25 @@ fn cwd_relative(
     canonical_cwd: &Path,
     canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
 ) -> Option<PathBuf> {
-    let canonical = if argument.file_name().is_some() {
-        dedup_key(argument, canon_parent_cache)
-    } else {
-        // Not `dedup_key`: for `.`, `..` or `src/..` it has no final
-        // component to keep and would return the parent it resolved.
-        fs::canonicalize(argument).ok()?
-    };
-    canonical
+    canonical_location(argument, canon_parent_cache)?
         .strip_prefix(canonical_cwd)
         .ok()
         .map(Path::to_path_buf)
         .or_else(|| typed_below_cwd(argument, canonical_cwd))
+}
+
+/// Where `argument` is, with every component but the last resolved.
+fn canonical_location(
+    argument: &Path,
+    canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Option<PathBuf> {
+    if argument.file_name().is_some() {
+        Some(dedup_key(argument, canon_parent_cache))
+    } else {
+        // Not `dedup_key`: for `.`, `..` or `src/..` it has no final
+        // component to keep and would return the parent it resolved.
+        fs::canonicalize(argument).ok()
+    }
 }
 
 /// `argument` as typed, relative to the cwd, when its text alone places it
@@ -1176,13 +1190,18 @@ mod tests {
             write_file(file);
         }
 
+        let same_dir_with_slash = dir.path().join("vendor/");
         let walked = walk_from(
             dir.path(),
-            &[&kept, &excluded_file, &excluded_dir],
+            &[&kept, &excluded_file, &excluded_dir, &same_dir_with_slash],
             &["*.min.js", "vendor/"],
         );
 
-        assert_eq!(walked.excluded_arguments, vec![excluded_file, excluded_dir]);
+        assert_eq!(
+            walked.excluded_arguments,
+            vec![excluded_file, excluded_dir],
+            "an argument given twice in different spellings is reported once"
+        );
         assert_eq!(walked.entries.len(), 1, "{:?}", walked.entries);
     }
 

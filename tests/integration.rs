@@ -1254,6 +1254,12 @@ fn test_issue_274_excluded_arguments_are_counted_and_listed_with_verbose() {
     ] {
         assert!(verbose.contains(line), "missing {line:?} in {verbose:?}");
     }
+
+    let quiet = run(&["--quiet"]);
+    assert!(
+        !quiet.contains("arguments excluded") && !quiet.contains("Skipping excluded"),
+        "--quiet prints neither the count nor the list: {quiet:?}"
+    );
 }
 
 #[test]
