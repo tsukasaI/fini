@@ -227,7 +227,9 @@ your repo).
   git repository
 
 Skipped binary / non-UTF-8 / symlink files are counted in the run summary;
-use `--verbose` to list them individually with the skip reason.
+use `--verbose` to list them individually with the skip reason. Arguments
+skipped by an exclude pattern are counted there too (`N arguments excluded`)
+and listed by `--verbose`.
 
 `--stdin` applies the same size, UTF-16, binary and non-UTF-8 gates to its
 input, honoring `--max-file-size` (and `max_file_size` in `fini.toml`). Since

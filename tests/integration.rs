@@ -1212,6 +1212,72 @@ fn test_file_outside_cwd_is_excluded_by_a_file_name_pattern() {
 }
 
 #[test]
+fn test_issue_274_excluded_arguments_are_counted_and_listed_with_verbose() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("vendor")).unwrap();
+    fs::write(dir.path().join("main.txt"), "hello\n").unwrap();
+    fs::write(dir.path().join("vendor/lib.txt"), "trailing \n").unwrap();
+    fs::write(dir.path().join("skip.min.js"), "trailing \n").unwrap();
+    let run = |extra: &[&str]| {
+        let output = fini_cmd()
+            .current_dir(dir.path())
+            .args(["--check", "--no-color", "--exclude", "vendor/"])
+            .args(["--exclude", "*.min.js"])
+            .args(extra)
+            .args(["main.txt", "vendor", "skip.min.js"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stderr: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let summary_only = run(&[]);
+    assert!(
+        summary_only.contains("2 arguments excluded (see --verbose)"),
+        "{summary_only:?}"
+    );
+    assert!(
+        !summary_only.contains("Skipping excluded"),
+        "the list is for --verbose: {summary_only:?}"
+    );
+
+    let verbose = run(&["--verbose"]);
+    for line in [
+        "Skipping excluded: vendor\n",
+        "Skipping excluded: skip.min.js\n",
+        "2 arguments excluded (see --verbose)",
+    ] {
+        assert!(verbose.contains(line), "missing {line:?} in {verbose:?}");
+    }
+}
+
+#[test]
+fn test_issue_274_no_excluded_argument_means_no_summary_part() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("vendor")).unwrap();
+    fs::write(dir.path().join("main.txt"), "hello\n").unwrap();
+    fs::write(dir.path().join("vendor/lib.txt"), "trailing \n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "--no-color", "--exclude", "vendor/", "."])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("arguments excluded"),
+        "an entry a walk filters is not an excluded argument: {stdout:?}"
+    );
+}
+
+#[test]
 fn test_issue_275_exclude_is_anchored_at_cwd_for_a_directory_argument() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join("src/gen")).unwrap();
