@@ -235,6 +235,27 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
         .collect()
 }
 
+/// The explicit embedding, override and isolate controls ("Trojan Source"),
+/// which can make a line display in a different order than it is stored.
+/// Not the marks LRM/RLM/ALM (U+200E, U+200F, U+061C): they only place
+/// neutral punctuation and are part of ordinary right-to-left text.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// One problem per line holding a bidi control, wherever it sits on the line.
+pub(super) fn detect_bidi_controls(content: &str, line_map: &[usize]) -> Vec<Problem> {
+    content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(is_bidi_control))
+        .map(|(line_idx, _)| Problem {
+            line: line_map[line_idx],
+            kind: ProblemKind::BidiControl,
+        })
+        .collect()
+}
+
 /// Default_Ignorable_Code_Point members plus control characters (C0 except
 /// `\t\n\r`, DEL, C1, U+2028/U+2029) that render as nothing or as blank, so
 /// they can split a secret, a TODO/FIXME marker or a debug pattern
@@ -474,6 +495,35 @@ mod tests {
             detect_debug_code(content, true, &identity_line_map(content)).len(),
             1
         );
+    }
+
+    // issue #279
+    #[test]
+    fn test_bidi_controls_are_reported_per_line() {
+        let content = "plain\n/* \u{202E} } \u{2066}if (isAdmin)\u{2069} \u{2066} begin */\nplain\nx = \"\u{202B}\"\n";
+        let problems = detect_bidi_controls(content, &identity_line_map(content));
+        assert_eq!(problems.iter().map(|p| p.line).collect::<Vec<_>>(), [2, 4]);
+        assert!(problems.iter().all(|p| p.kind == ProblemKind::BidiControl));
+    }
+
+    #[test]
+    fn test_every_embedding_override_and_isolate_is_a_bidi_control() {
+        for c in ('\u{202A}'..='\u{202E}').chain('\u{2066}'..='\u{2069}') {
+            let content = format!("a{c}b\n");
+            assert_eq!(
+                detect_bidi_controls(&content, &identity_line_map(&content)).len(),
+                1,
+                "U+{:04X} not reported",
+                u32::from(c)
+            );
+        }
+    }
+
+    #[test]
+    fn test_marks_and_neighbouring_code_points_are_not_bidi_controls() {
+        // LRM, RLM, ALM, then the code points on either side of the two ranges.
+        let content = "a\u{200E}b\u{200F}c\u{061C}d\u{2029}e\u{202F}f\u{2065}g\u{206A}h\n";
+        assert!(detect_bidi_controls(content, &identity_line_map(content)).is_empty());
     }
 
     #[test]

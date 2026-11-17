@@ -17,8 +17,8 @@ pub use normalize::{
     normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind, FIX_KIND_IGNORE_HINT,
 };
 pub use output::{
-    escape_line_breaks, print_check_report_to, safe_path_display, warn_suppressed_secrets, Config,
-    OutputContext, OutputMode, RunResult,
+    escape_line_breaks, print_check_report_to, safe_path_display,
+    warn_suppressed_security_detections, Config, OutputContext, OutputMode, RunResult,
 };
 
 use walker::walk_paths;
@@ -405,12 +405,12 @@ fn process_file(path: &Path, normalize_config: &NormalizeConfig) -> FileOutcome 
 }
 
 /// Count suppressed problems and leave an stderr audit trail for suppressed
-/// secrets — even in --quiet mode — so `fini:ignore secret` can be reviewed,
-/// not just trusted (issue #46).
+/// secret and bidi-control detections — even in --quiet mode — so a
+/// `fini:ignore` that hides one can be reviewed, not just trusted (issue #46).
 fn record_suppressed(path: &Path, suppressed: &[Problem], result: &mut RunResult) {
     result.suppressed += suppressed.len();
     result.suppressed_secrets +=
-        output::warn_suppressed_secrets(&output::safe_path_display(path), suppressed);
+        output::warn_suppressed_security_detections(&output::safe_path_display(path), suppressed);
 }
 
 /// Atomically replace `path` with `content`: write to a temp file in the same

@@ -7,8 +7,8 @@ use fini::{
     check_editorconfig_conflicts, escape_line_breaks, find_config_file, find_editorconfig,
     generate_init_file, load_config, merge_exclude_patterns, merge_normalize_config,
     normalize_content, parse_editorconfig, print_check_report_to, read_gated, run,
-    safe_path_display, should_use_colors, warn_suppressed_secrets, CliNormalizeOptions, Colors,
-    Config, FiniToml, OutputContext, OutputMode, SkipReason, FIX_KIND_IGNORE_HINT,
+    safe_path_display, should_use_colors, warn_suppressed_security_detections, CliNormalizeOptions,
+    Colors, Config, FiniToml, OutputContext, OutputMode, SkipReason, FIX_KIND_IGNORE_HINT,
 };
 
 /// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
@@ -104,6 +104,10 @@ struct Cli {
     #[arg(long)]
     no_detect_secrets: bool,
 
+    /// Skip bidirectional control character detection
+    #[arg(long)]
+    no_detect_bidi: bool,
+
     /// Maximum line length (warn if exceeded)
     #[arg(long, value_name = "N")]
     max_line_length: Option<usize>,
@@ -163,6 +167,11 @@ fn main() -> ExitCode {
     // #80 gave stdin a config file to disable it with in the first place).
     if !normalize.detect_secrets && !cli.no_detect_secrets {
         eprintln!("Warning: config file disables secret detection (detect_secrets = false)");
+    }
+    if !normalize.detect_bidi && !cli.no_detect_bidi {
+        eprintln!(
+            "Warning: config file disables bidirectional control detection (detect_bidi = false)"
+        );
     }
 
     if cli.stdin {
@@ -250,8 +259,9 @@ fn handle_stdin(cli: &Cli, normalize: &fini::NormalizeConfig) -> ExitCode {
 
     let result = normalize_content(&input, normalize);
 
-    // Suppressed secrets keep an stderr audit trail in stdin mode too (issue #46)
-    warn_suppressed_secrets("stdin", &result.suppressed);
+    // Suppressed secret and bidi-control detections keep an stderr audit
+    // trail in stdin mode too (issue #46)
+    warn_suppressed_security_detections("stdin", &result.suppressed);
     // Advisory only: --quiet silences it, unlike the audit trail above.
     if result.ignores_only_fix_kinds && !cli.quiet {
         eprintln!("{FIX_KIND_IGNORE_HINT}");
@@ -349,6 +359,7 @@ fn build_cli_options(cli: &Cli) -> CliNormalizeOptions {
         no_detect_debug: cli.no_detect_debug.then_some(true),
         strict_debug: cli.strict_debug.then_some(true),
         no_detect_secrets: cli.no_detect_secrets.then_some(true),
+        no_detect_bidi: cli.no_detect_bidi.then_some(true),
         max_line_length: cli.max_line_length,
         max_file_size: cli.max_file_size,
     }
