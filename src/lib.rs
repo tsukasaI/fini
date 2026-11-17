@@ -140,10 +140,19 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
         skipped: 0,
         suppressed: 0,
         suppressed_secrets: 0,
+        excluded_arguments: 0,
     };
 
+    let walked = walk_paths(paths, &config.exclude_patterns, config.include_hidden)?;
+    result.excluded_arguments = walked.excluded_arguments.len();
+    if ctx.verbose {
+        for argument in &walked.excluded_arguments {
+            output::print_skipped(argument, "excluded", ctx);
+        }
+    }
+
     let mut file_paths = vec![];
-    for entry in walk_paths(paths, &config.exclude_patterns, config.include_hidden)? {
+    for entry in walked.entries {
         match entry {
             Ok(path) => file_paths.push(path),
             Err(e) => {

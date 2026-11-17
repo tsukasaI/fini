@@ -6,6 +6,15 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+/// What `walk_paths` found for its arguments.
+pub struct Walked {
+    /// Files to process; a per-entry walk error stays in place.
+    pub entries: Vec<io::Result<PathBuf>>,
+    /// Arguments, as typed, that an exclude pattern skipped without
+    /// walking them.
+    pub excluded_arguments: Vec<PathBuf>,
+}
+
 /// Walk paths and return file paths, respecting gitignore and custom exclude patterns.
 ///
 /// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js")
@@ -21,7 +30,7 @@ pub fn walk_paths(
     paths: &[String],
     exclude_patterns: &[String],
     include_hidden: bool,
-) -> io::Result<Vec<io::Result<PathBuf>>> {
+) -> io::Result<Walked> {
     let canonical_cwd = std::env::current_dir().and_then(fs::canonicalize).ok();
     walk_paths_from(
         canonical_cwd.as_deref(),
@@ -39,8 +48,10 @@ fn walk_paths_from(
     paths: &[String],
     exclude_patterns: &[String],
     include_hidden: bool,
-) -> io::Result<Vec<io::Result<PathBuf>>> {
+) -> io::Result<Walked> {
     let mut all_files = vec![];
+    let mut excluded_arguments = vec![];
+    let mut seen_excluded = HashSet::new();
     // Overlapping path arguments (e.g. `fini src src/a.rs`) can walk the same
     // file more than once; dedup so it's only ever processed once (issue
     // #81). See `dedup_key` for the key used.
@@ -98,6 +109,13 @@ fn walk_paths_from(
             .and_then(|cwd| cwd_relative(root, cwd, &mut canon_parent_cache))
             .unwrap_or_default();
         if is_excluded_argument(root, &anchored_root, argument_excludes.as_ref()) {
+            // Not keyed on the typed text: `vendor`, `./vendor` and `vendor/`
+            // are one argument given three times, as for files (issue #81).
+            let location = canonical_location(root, &mut canon_parent_cache)
+                .unwrap_or_else(|| root.to_path_buf());
+            if seen_excluded.insert(location) {
+                excluded_arguments.push(root.to_path_buf());
+            }
             continue;
         }
         let excludes = AnchoredExcludes {
@@ -178,7 +196,10 @@ fn walk_paths_from(
         }
     }
 
-    Ok(all_files)
+    Ok(Walked {
+        entries: all_files,
+        excluded_arguments,
+    })
 }
 
 fn build_excludes(patterns: &[&str]) -> io::Result<Option<Override>> {
@@ -220,18 +241,25 @@ fn cwd_relative(
     canonical_cwd: &Path,
     canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
 ) -> Option<PathBuf> {
-    let canonical = if argument.file_name().is_some() {
-        dedup_key(argument, canon_parent_cache)
-    } else {
-        // Not `dedup_key`: for `.`, `..` or `src/..` it has no final
-        // component to keep and would return the parent it resolved.
-        fs::canonicalize(argument).ok()?
-    };
-    canonical
+    canonical_location(argument, canon_parent_cache)?
         .strip_prefix(canonical_cwd)
         .ok()
         .map(Path::to_path_buf)
         .or_else(|| typed_below_cwd(argument, canonical_cwd))
+}
+
+/// Where `argument` is, with every component but the last resolved.
+fn canonical_location(
+    argument: &Path,
+    canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Option<PathBuf> {
+    if argument.file_name().is_some() {
+        Some(dedup_key(argument, canon_parent_cache))
+    } else {
+        // Not `dedup_key`: for `.`, `..` or `src/..` it has no final
+        // component to keep and would return the parent it resolved.
+        fs::canonicalize(argument).ok()
+    }
 }
 
 /// `argument` as typed, relative to the cwd, when its text alone places it
@@ -562,6 +590,16 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// The entries alone, for the tests that don't look at excluded
+    /// arguments. Shadows the glob-imported `walk_paths`.
+    fn walk_paths(
+        paths: &[String],
+        exclude_patterns: &[String],
+        include_hidden: bool,
+    ) -> io::Result<Vec<io::Result<PathBuf>>> {
+        super::walk_paths(paths, exclude_patterns, include_hidden).map(|walked| walked.entries)
+    }
 
     fn git_command() -> Command {
         let mut cmd = Command::new("git");
@@ -929,7 +967,7 @@ mod tests {
     }
 
     /// Walks absolute `paths` as if fini had been started in `cwd`.
-    fn walk_from(cwd: &Path, paths: &[&Path], exclude: &[&str]) -> Vec<io::Result<PathBuf>> {
+    fn walk_from(cwd: &Path, paths: &[&Path], exclude: &[&str]) -> Walked {
         let cwd = cwd.canonicalize().unwrap();
         let paths: Vec<String> = paths
             .iter()
@@ -941,6 +979,7 @@ mod tests {
 
     fn walk_files_from(cwd: &Path, paths: &[&Path], exclude: &[&str]) -> Vec<PathBuf> {
         walk_from(cwd, paths, exclude)
+            .entries
             .into_iter()
             .map(|entry| entry.unwrap())
             .collect()
@@ -977,7 +1016,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let missing = dir.path().join("gone.min.js");
 
-        let results = walk_from(dir.path(), &[&missing], &["*.min.js"]);
+        let results = walk_from(dir.path(), &[&missing], &["*.min.js"]).entries;
 
         assert_eq!(results.len(), 1);
         assert!(
@@ -1020,6 +1059,7 @@ mod tests {
             let paths = [argument.to_string_lossy().to_string()];
             walk_paths_from(None, &paths, &[exclude.to_string()], false)
                 .unwrap()
+                .entries
                 .into_iter()
                 .map(|entry| entry.unwrap())
                 .collect()
@@ -1136,6 +1176,47 @@ mod tests {
             files,
             vec![cwd_through_src.join("main.rs")],
             "src/.. is the cwd, not src: only what is under src/ may be skipped"
+        );
+    }
+
+    // issue #274
+    #[test]
+    fn test_excluded_arguments_are_reported_as_typed() {
+        let dir = TempDir::new().unwrap();
+        let kept = dir.path().join("main.rs");
+        let excluded_file = dir.path().join("style.min.js");
+        let excluded_dir = dir.path().join("vendor");
+        for file in [&kept, &excluded_file, &excluded_dir.join("lib.js")] {
+            write_file(file);
+        }
+
+        let same_dir_with_slash = dir.path().join("vendor/");
+        let walked = walk_from(
+            dir.path(),
+            &[&kept, &excluded_file, &excluded_dir, &same_dir_with_slash],
+            &["*.min.js", "vendor/"],
+        );
+
+        assert_eq!(
+            walked.excluded_arguments,
+            vec![excluded_file, excluded_dir],
+            "an argument given twice in different spellings is reported once"
+        );
+        assert_eq!(walked.entries.len(), 1, "{:?}", walked.entries);
+    }
+
+    #[test]
+    fn test_entry_excluded_inside_a_walk_is_not_an_excluded_argument() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("vendor/lib.js"));
+
+        let walked = walk_from(dir.path(), &[dir.path()], &["vendor/"]);
+
+        assert!(walked.entries.is_empty(), "{:?}", walked.entries);
+        assert!(
+            walked.excluded_arguments.is_empty(),
+            "only arguments are reported, not what a walk filters: {:?}",
+            walked.excluded_arguments
         );
     }
 

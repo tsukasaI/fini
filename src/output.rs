@@ -95,6 +95,8 @@ pub struct RunResult {
     /// Problems suppressed via fini:ignore directives (issue #46)
     pub suppressed: usize,
     pub suppressed_secrets: usize,
+    /// File or directory arguments an exclude pattern skipped (issue #274)
+    pub excluded_arguments: usize,
 }
 
 impl RunResult {
@@ -582,6 +584,15 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
         parts.push(colored(
             ctx.colors.info,
             format!("{} files skipped (see --verbose)", result.skipped),
+        ));
+    }
+    if result.excluded_arguments > 0 {
+        parts.push(colored(
+            ctx.colors.info,
+            format!(
+                "{} arguments excluded (see --verbose)",
+                result.excluded_arguments
+            ),
         ));
     }
     if result.suppressed > 0 {
