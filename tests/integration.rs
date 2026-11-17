@@ -1105,10 +1105,11 @@ fn test_dot_prefix_of_explicit_file_is_not_matched_by_exclude() {
 
 #[test]
 fn test_config_exclude_applies_to_explicit_absolute_file() {
-    // Canonical: fini strips its cwd from an absolute argument, and on macOS
-    // the temp dir is reached through the `/var -> /private/var` symlink.
+    // Not canonicalized: on macOS the temp dir is reached through the
+    // `/var -> /private/var` symlink, so the arguments are spelled
+    // differently from fini's own cwd (issue #273).
     let dir = TempDir::new().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = dir.path();
     // A slash in the middle anchors the pattern to the cwd, so this only
     // matches once the absolute argument is made relative to it.
     fs::write(root.join("fini.toml"), "exclude = [\"tests/fixtures/\"]\n").unwrap();
@@ -1120,7 +1121,7 @@ fn test_config_exclude_applies_to_explicit_absolute_file() {
     fs::write(&not_anchored, "hello").unwrap();
 
     let output = fini_cmd()
-        .current_dir(&root)
+        .current_dir(root)
         .arg(&excluded)
         .arg(&not_anchored)
         .output()
@@ -1134,6 +1135,130 @@ fn test_config_exclude_applies_to_explicit_absolute_file() {
     );
     assert_eq!(fs::read_to_string(&excluded).unwrap(), "world");
     assert_eq!(fs::read_to_string(&not_anchored).unwrap(), "hello\n");
+}
+
+#[test]
+fn test_issue_273_file_outside_cwd_is_scanned_despite_matching_directory_name() {
+    let base = TempDir::new().unwrap();
+    fs::create_dir(base.path().join("proj")).unwrap();
+    fs::create_dir(base.path().join("vendor")).unwrap();
+    let outside = base.path().join("vendor/lib.txt");
+    fs::write(&outside, "world").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(base.path().join("proj"))
+        .args(["--exclude", "vendor/", "../vendor/lib.txt"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap(),
+        "world\n",
+        "a file named from outside the cwd must not be skipped by a directory above the scan"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_file_behind_symlinked_directory_leaving_cwd_stays_excluded() {
+    let base = TempDir::new().unwrap();
+    fs::create_dir(base.path().join("proj")).unwrap();
+    fs::create_dir(base.path().join("big")).unwrap();
+    let target = base.path().join("big/x.csv");
+    fs::write(&target, "a,b").unwrap();
+    std::os::unix::fs::symlink("../big", base.path().join("proj/data")).unwrap();
+
+    let output = fini_cmd()
+        .current_dir(base.path().join("proj"))
+        .args(["--exclude", "data/", "data/x.csv"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "a,b",
+        "data/ must keep a file reached through the data symlink from being rewritten"
+    );
+}
+
+#[test]
+fn test_file_outside_cwd_is_excluded_by_a_file_name_pattern() {
+    let base = TempDir::new().unwrap();
+    fs::create_dir(base.path().join("proj")).unwrap();
+    fs::create_dir(base.path().join("other")).unwrap();
+    let outside = base.path().join("other/golden.snap");
+    fs::write(&outside, "world").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(base.path().join("proj"))
+        .args(["--exclude", "*.snap", "../other/golden.snap"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "world");
+}
+
+#[test]
+fn test_issue_275_exclude_is_anchored_at_cwd_for_a_directory_argument() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("src/gen")).unwrap();
+    fs::write(dir.path().join("src/a.txt"), "hello").unwrap();
+    fs::write(dir.path().join("src/gen/x.txt"), "world").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--exclude", "src/gen/", "src"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("src/a.txt")).unwrap(),
+        "hello\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("src/gen/x.txt")).unwrap(),
+        "world",
+        "`fini src` must exclude src/gen/ the same way `fini .` does"
+    );
+}
+
+#[test]
+fn test_issue_275_excluded_directory_argument_scans_nothing() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("vendor")).unwrap();
+    fs::write(dir.path().join("vendor/lib.txt"), "trailing \n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "--exclude", "vendor/", "vendor"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "an excluded directory argument must say it scanned nothing: {stderr:?}"
+    );
 }
 
 #[test]

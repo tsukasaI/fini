@@ -8,13 +8,34 @@ use std::process::Command;
 
 /// Walk paths and return file paths, respecting gitignore and custom exclude patterns.
 ///
-/// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js").
+/// Exclude patterns use gitignore-style glob syntax (e.g., "vendor/", "*.min.js")
+/// and are matched relative to the current directory for every argument
+/// inside it; an argument outside it anchors them at itself (a file
+/// argument, at its directory).
 ///
 /// Returns `Err` immediately for fatal configuration errors (e.g. an invalid exclude
 /// pattern) so callers can fail closed instead of silently walking with no excludes.
 /// Once walking starts, per-entry errors (e.g. permission-denied on a subdirectory)
 /// are returned as `Err` elements rather than aborting the whole walk.
 pub fn walk_paths(
+    paths: &[String],
+    exclude_patterns: &[String],
+    include_hidden: bool,
+) -> io::Result<Vec<io::Result<PathBuf>>> {
+    let canonical_cwd = std::env::current_dir().and_then(fs::canonicalize).ok();
+    walk_paths_from(
+        canonical_cwd.as_deref(),
+        paths,
+        exclude_patterns,
+        include_hidden,
+    )
+}
+
+/// `walk_paths` with the directory that anchors exclude patterns passed in.
+/// `None` (the cwd could not be resolved) anchors every pattern at the
+/// argument it is applied under.
+fn walk_paths_from(
+    canonical_cwd: Option<&Path>,
     paths: &[String],
     exclude_patterns: &[String],
     include_hidden: bool,
@@ -28,14 +49,16 @@ pub fn walk_paths(
     // with many files pays that syscall once, not once per file.
     let mut canon_parent_cache = HashMap::new();
 
-    // Not the per-argument matcher built below: that one is rooted at the
-    // argument, which for a file argument leaves no directory to match
-    // `vendor/` against. "." disables `ignore`'s root-prefix stripping (it
-    // still drops one leading "./"), so patterns apply to the path as
-    // `is_excluded_file_argument` hands it over.
     let user_patterns: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
-    let file_argument_excludes = build_excludes(Path::new("."), &user_patterns)?;
-    let cwd = std::env::current_dir().ok();
+    let argument_excludes = build_excludes(&user_patterns)?;
+    let mut walk_patterns = user_patterns;
+    if include_hidden {
+        // No trailing slash: a worktree or submodule checkout has
+        // ".git" as a *file* (containing "gitdir: ..."), not a
+        // directory, and a directory-only pattern wouldn't match it.
+        walk_patterns.push(".git");
+    }
+    let walk_excludes = build_excludes(&walk_patterns)?;
 
     for path in paths {
         // A root path argument that is itself a symlink to a directory is
@@ -70,13 +93,18 @@ pub fn walk_paths(
             continue;
         }
 
-        if is_excluded_file_argument(
-            Path::new(path),
-            cwd.as_deref(),
-            file_argument_excludes.as_ref(),
-        ) {
+        let root = Path::new(path);
+        let anchored_root = canonical_cwd
+            .and_then(|cwd| cwd_relative(root, cwd, &mut canon_parent_cache))
+            .unwrap_or_default();
+        if is_excluded_argument(root, &anchored_root, argument_excludes.as_ref()) {
             continue;
         }
+        let excludes = AnchoredExcludes {
+            matcher: walk_excludes.clone(),
+            typed_root: root.to_path_buf(),
+            anchored_root,
+        };
 
         let mut builder = WalkBuilder::new(path);
         builder
@@ -100,17 +128,15 @@ pub fn walk_paths(
             .git_global(true)
             .git_exclude(true);
 
-        let mut patterns: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
-        if include_hidden {
-            // No trailing slash: a worktree or submodule checkout has
-            // ".git" as a *file* (containing "gitdir: ..."), not a
-            // directory, and a directory-only pattern wouldn't match it.
-            patterns.push(".git");
-        }
-
-        let overrides_built = build_excludes(Path::new(path), &patterns)?;
-        if let Some(built) = &overrides_built {
-            builder.overrides(built.clone());
+        if excludes.matcher.is_some() {
+            // Not `builder.overrides`: `ignore` matches an override against
+            // the entry path as typed, which is only relative to the cwd for
+            // some spellings of the argument.
+            let filter = excludes.clone();
+            builder.filter_entry(move |entry| {
+                let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+                !filter.matches(entry.path(), is_dir)
+            });
         }
 
         for entry in builder.build() {
@@ -140,12 +166,11 @@ pub fn walk_paths(
         // as a second, non-walking pass reasonably can; known carve-out: a
         // `.ignore` file (as opposed to `.gitignore`) is not consulted here,
         // so a tracked file it excludes is still rescued.
-        let root = Path::new(path);
         if root.is_dir() {
             rescue_tracked_files(
                 root,
                 include_hidden,
-                overrides_built.as_ref(),
+                &excludes,
                 &mut seen,
                 &mut canon_parent_cache,
                 &mut all_files,
@@ -156,11 +181,14 @@ pub fn walk_paths(
     Ok(all_files)
 }
 
-fn build_excludes(root: &Path, patterns: &[&str]) -> io::Result<Option<Override>> {
+fn build_excludes(patterns: &[&str]) -> io::Result<Option<Override>> {
     if patterns.is_empty() {
         return Ok(None);
     }
-    let mut overrides = OverrideBuilder::new(root);
+    // "." disables `ignore`'s root-prefix stripping, so a pattern applies to
+    // exactly the anchor-relative path `AnchoredExcludes` and
+    // `is_excluded_argument` hand over.
+    let mut overrides = OverrideBuilder::new(".");
     for pattern in patterns {
         // OverrideBuilder uses inverted ! semantics:
         // !pattern = exclude, pattern = whitelist
@@ -174,37 +202,136 @@ fn build_excludes(root: &Path, patterns: &[&str]) -> io::Result<Option<Override>
         .map_err(|e| io::Error::other(format!("failed to build exclude patterns: {e}")))
 }
 
-/// True if `path` names an existing non-directory that a user exclude
-/// pattern matches, either directly or through one of its directories.
+/// `argument` relative to `canonical_cwd`, or `None` when it is outside the
+/// cwd or can't be resolved.
+///
+/// Not a lexical `strip_prefix` on the path as typed: `/tmp/x` and
+/// `/private/tmp/x`, a symlinked checkout, and `vendor/../src` each name a
+/// place the typed text doesn't show, and matching that text let a
+/// directory above the project exclude a file (issue #273).
+///
+/// The final component stays unresolved (`dedup_key`): a symlink is matched
+/// by where the link sits, not by where it points.
+///
+/// The typed path is the fallback only when resolving leads out of the cwd
+/// (see `typed_below_cwd`).
+fn cwd_relative(
+    argument: &Path,
+    canonical_cwd: &Path,
+    canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Option<PathBuf> {
+    let canonical = if argument.file_name().is_some() {
+        dedup_key(argument, canon_parent_cache)
+    } else {
+        // Not `dedup_key`: for `.`, `..` or `src/..` it has no final
+        // component to keep and would return the parent it resolved.
+        fs::canonicalize(argument).ok()?
+    };
+    canonical
+        .strip_prefix(canonical_cwd)
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| typed_below_cwd(argument, canonical_cwd))
+}
+
+/// `argument` as typed, relative to the cwd, when its text alone places it
+/// below the cwd: no `..`, and either relative or starting with
+/// `canonical_cwd`.
+///
+/// For a path through a symlinked directory that leads out of the cwd
+/// (`data -> /mnt/data`, then `data/x.csv`). A walk never descends such a
+/// link, so an exclude written against the typed path (`data/`) is all that
+/// keeps the file from being rewritten. Without `..`, no directory above
+/// the cwd can take part in the match, which is what #273 was about.
+fn typed_below_cwd(argument: &Path, canonical_cwd: &Path) -> Option<PathBuf> {
+    let relative = if argument.is_absolute() {
+        argument.strip_prefix(canonical_cwd).ok()?
+    } else {
+        argument
+    };
+    let mut below_cwd = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => below_cwd.push(name),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(below_cwd)
+}
+
+/// True if a user exclude pattern matches an existing argument.
+/// `anchored_root` is `cwd_relative`'s answer: for an argument below the
+/// cwd, the argument and each directory between it and the cwd are tested.
 ///
 /// The walk can't answer this: `ignore` yields a root argument without
-/// consulting overrides, so a file passed by name (pre-commit, an editor
+/// consulting any filter, so a file passed by name (pre-commit, an editor
 /// hook) would otherwise bypass `--exclude`/config excludes (issue #264).
-///
-/// An absolute path under `cwd` is matched relative to it, the same way
-/// `fini .` sees the file, so a pattern anchored by a slash
-/// (`tests/fixtures/`) behaves the same on both routes. Anything else is
-/// matched as typed.
-fn is_excluded_file_argument(path: &Path, cwd: Option<&Path>, excludes: Option<&Override>) -> bool {
-    if excludes.is_none() {
+fn is_excluded_argument(
+    argument: &Path,
+    anchored_root: &Path,
+    excludes: Option<&Override>,
+) -> bool {
+    let Some(excludes) = excludes else {
         return false;
-    }
+    };
     // Not skipped when missing: a path that doesn't exist must still reach
     // the walk and be reported as an error, excluded pattern or not.
-    if !fs::metadata(path).is_ok_and(|m| !m.is_dir()) {
+    let Ok(metadata) = fs::metadata(argument) else {
         return false;
+    };
+    let mut is_dir = metadata.is_dir();
+    if anchored_root.as_os_str().is_empty() {
+        // The cwd itself, or an argument outside it. Not its directories:
+        // nothing above it is part of the scan (issue #273). A file still
+        // has its own name, which is what a walk of its directory would
+        // match it by, so `*.snap` applies to it and `vendor/` cannot.
+        return !is_dir
+            && argument
+                .file_name()
+                .is_some_and(|name| excludes.matched(Path::new(name), false).is_ignore());
     }
-    let relative = cwd
-        .and_then(|cwd| path.strip_prefix(cwd).ok())
-        .unwrap_or(path);
-    is_override_ignored(excludes, relative, false)
-        || relative
-            .ancestors()
-            .skip(1)
-            // Not every ancestor: `.`, `..`, `/` and the empty tail name no
-            // directory, yet `.` and `..` would match a pattern like `.*`.
-            .filter(|dir| dir.file_name().is_some())
-            .any(|dir| is_override_ignored(excludes, dir, true))
+    for path in anchored_root.ancestors() {
+        if path.as_os_str().is_empty() {
+            break;
+        }
+        if excludes.matched(path, is_dir).is_ignore() {
+            return true;
+        }
+        is_dir = true;
+    }
+    false
+}
+
+/// Exclude patterns for the walk under one argument.
+#[derive(Clone)]
+struct AnchoredExcludes {
+    matcher: Option<Override>,
+    /// The argument as typed; every entry found under it starts with this.
+    typed_root: PathBuf,
+    /// The argument relative to the cwd, which anchors the patterns there.
+    /// Empty for an argument outside the cwd: patterns are then anchored
+    /// at the argument itself.
+    anchored_root: PathBuf,
+}
+
+impl AnchoredExcludes {
+    /// Whether a pattern matches `entry`, a path below the argument. The
+    /// argument itself is `is_excluded_argument`'s to judge.
+    fn matches(&self, entry: &Path, is_dir: bool) -> bool {
+        let Some(matcher) = &self.matcher else {
+            return false;
+        };
+        let Ok(below_root) = entry.strip_prefix(&self.typed_root) else {
+            return false;
+        };
+        if below_root.as_os_str().is_empty() {
+            return false;
+        }
+        matcher
+            .matched(self.anchored_root.join(below_root), is_dir)
+            .is_ignore()
+    }
 }
 
 /// Mirrors `builder.hidden(!include_hidden)`: any dotfile/dotdir component.
@@ -213,14 +340,10 @@ fn has_hidden_component(rel: &Path) -> bool {
         .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
 }
 
-fn is_override_ignored(overrides: Option<&Override>, path: &Path, is_dir: bool) -> bool {
-    overrides.is_some_and(|o| o.matched(path, is_dir).is_ignore())
-}
-
 fn rescue_tracked_files(
     root: &Path,
     include_hidden: bool,
-    overrides: Option<&Override>,
+    excludes: &AnchoredExcludes,
     seen: &mut HashSet<PathBuf>,
     canon_parent_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
     all_files: &mut Vec<io::Result<PathBuf>>,
@@ -260,12 +383,12 @@ fn rescue_tracked_files(
             fs::symlink_metadata(a)
                 .map(|m| m.is_symlink())
                 .unwrap_or(true)
-                || is_override_ignored(overrides, a, true)
+                || excludes.matches(a, true)
         });
         if ancestor_blocked {
             continue;
         }
-        if is_override_ignored(overrides, &abs, false) {
+        if excludes.matches(&abs, false) {
             continue;
         }
 
@@ -805,30 +928,46 @@ mod tests {
         assert!(files[0].to_string_lossy().contains("app.js"));
     }
 
+    /// Walks absolute `paths` as if fini had been started in `cwd`.
+    fn walk_from(cwd: &Path, paths: &[&Path], exclude: &[&str]) -> Vec<io::Result<PathBuf>> {
+        let cwd = cwd.canonicalize().unwrap();
+        let paths: Vec<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let exclude: Vec<String> = exclude.iter().map(|p| (*p).to_string()).collect();
+        walk_paths_from(Some(&cwd), &paths, &exclude, false).unwrap()
+    }
+
+    fn walk_files_from(cwd: &Path, paths: &[&Path], exclude: &[&str]) -> Vec<PathBuf> {
+        walk_from(cwd, paths, exclude)
+            .into_iter()
+            .map(|entry| entry.unwrap())
+            .collect()
+    }
+
+    fn write_file(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "content").unwrap();
+    }
+
     #[test]
     fn test_exclude_applies_to_explicit_file() {
         let dir = TempDir::new().unwrap();
-        fs::create_dir(dir.path().join("vendor")).unwrap();
         let kept = dir.path().join("main.rs");
         let minified = dir.path().join("style.min.js");
         let vendored = dir.path().join("vendor/lib.js");
         // A file, so the directory-only pattern `vendor/` must not match it.
         let file_named_like_dir = dir.path().join("sub/vendor");
-        fs::create_dir(dir.path().join("sub")).unwrap();
         for file in [&kept, &minified, &vendored, &file_named_like_dir] {
-            fs::write(file, "content").unwrap();
+            write_file(file);
         }
 
-        let paths: Vec<String> = [&kept, &minified, &vendored, &file_named_like_dir]
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-        let exclude = vec!["*.min.js".to_string(), "vendor/".to_string()];
-        let files: Vec<PathBuf> = walk_paths(&paths, &exclude, false)
-            .unwrap()
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .collect();
+        let files = walk_files_from(
+            dir.path(),
+            &[&kept, &minified, &vendored, &file_named_like_dir],
+            &["*.min.js", "vendor/"],
+        );
 
         assert_eq!(files, vec![kept, file_named_like_dir]);
     }
@@ -838,14 +977,219 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let missing = dir.path().join("gone.min.js");
 
-        let paths = vec![missing.to_string_lossy().to_string()];
-        let exclude = vec!["*.min.js".to_string()];
-        let results = walk_paths(&paths, &exclude, false).unwrap();
+        let results = walk_from(dir.path(), &[&missing], &["*.min.js"]);
 
         assert_eq!(results.len(), 1);
         assert!(
             results[0].is_err(),
             "a path that does not exist must be reported, not hidden by an exclude: {results:?}"
+        );
+    }
+
+    #[test]
+    fn test_issue_273_file_argument_outside_cwd_is_matched_by_name_only() {
+        let base = TempDir::new().unwrap();
+        let cwd = base.path().join("proj");
+        fs::create_dir(&cwd).unwrap();
+        let outside = base.path().join("vendor/lib.js");
+        write_file(&outside);
+
+        let files = walk_files_from(&cwd, &[&outside], &["vendor/", "/vendor/lib.js"]);
+        assert_eq!(
+            files,
+            vec![outside.clone()],
+            "no directory above an argument outside the cwd is part of the scan"
+        );
+
+        let files = walk_files_from(&cwd, &[&outside], &["*.js"]);
+        assert!(
+            files.is_empty(),
+            "a file-name pattern applies wherever the file is, as it would under a directory argument: {files:?}"
+        );
+    }
+
+    #[test]
+    fn test_unresolved_cwd_anchors_patterns_at_the_argument() {
+        let dir = TempDir::new().unwrap();
+        let vendored = dir.path().join("vendor/lib.js");
+        let kept = dir.path().join("src/a.rs");
+        for file in [&vendored, &kept, &dir.path().join("src/gen/x.rs")] {
+            write_file(file);
+        }
+        let walk = |argument: &Path, exclude: &str| -> Vec<PathBuf> {
+            let paths = [argument.to_string_lossy().to_string()];
+            walk_paths_from(None, &paths, &[exclude.to_string()], false)
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.unwrap())
+                .collect()
+        };
+
+        assert_eq!(walk(&vendored, "vendor/"), vec![vendored.clone()]);
+        assert_eq!(walk(&dir.path().join("src"), "/gen/"), vec![kept]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_issue_273_symlinked_directory_component_is_resolved() {
+        let base = TempDir::new().unwrap();
+        let cwd = base.path().join("proj");
+        write_file(&cwd.join("tests/a.txt"));
+        write_file(&cwd.join("tests/fixtures/x.txt"));
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&cwd, &link).unwrap();
+
+        let files = walk_files_from(
+            &cwd,
+            &[&link.join("tests/fixtures/x.txt"), &link.join("tests")],
+            &["tests/fixtures/"],
+        );
+
+        assert_eq!(
+            files,
+            vec![link.join("tests/a.txt")],
+            "link/tests is <cwd>/tests, so tests/fixtures/ must apply under it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_argument_is_matched_where_the_link_sits() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("vendor/lib.txt"));
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(dir.path().join("vendor/lib.txt"), &link).unwrap();
+
+        let files = walk_files_from(dir.path(), &[&link], &["vendor/"]);
+
+        assert_eq!(
+            files,
+            vec![link],
+            "the link is not under vendor/; only its target is"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_file_under_symlinked_directory_leaving_cwd_is_matched_as_typed() {
+        let base = TempDir::new().unwrap();
+        // Canonical, so the absolute arguments below start with the cwd as
+        // fini resolves it (macOS reaches the temp dir through a symlink).
+        let cwd = base.path().canonicalize().unwrap().join("proj");
+        fs::create_dir(&cwd).unwrap();
+        write_file(&base.path().join("big/x.csv"));
+        std::os::unix::fs::symlink(base.path().join("big"), cwd.join("data")).unwrap();
+        let through_link = cwd.join("data/x.csv");
+
+        let files = walk_files_from(&cwd, &[&through_link], &["data/"]);
+        assert!(
+            files.is_empty(),
+            "data/ is the only thing keeping a file behind the link from being rewritten: {files:?}"
+        );
+
+        let files = walk_files_from(&cwd, &[&through_link], &["big/"]);
+        assert_eq!(
+            files,
+            vec![through_link],
+            "big/ is outside the cwd and not in the typed path"
+        );
+    }
+
+    #[test]
+    fn test_issue_273_directory_above_cwd_does_not_exclude() {
+        let base = TempDir::new().unwrap();
+        let cwd = base.path().join("vendor/proj");
+        let file = cwd.join("main.rs");
+        write_file(&file);
+
+        let files = walk_files_from(&cwd, &[&file], &["vendor/"]);
+
+        assert_eq!(files, vec![file]);
+    }
+
+    #[test]
+    fn test_issue_273_parent_component_is_resolved_before_matching() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("vendor")).unwrap();
+        write_file(&dir.path().join("src/main.rs"));
+        let through_vendor = dir.path().join("vendor/../src/main.rs");
+
+        let files = walk_files_from(dir.path(), &[&through_vendor], &["vendor/"]);
+
+        assert_eq!(
+            files,
+            vec![through_vendor],
+            "src/main.rs is not under vendor/, however the path was spelled"
+        );
+    }
+
+    #[test]
+    fn test_issue_273_argument_ending_in_parent_component_names_the_parent() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("main.rs"));
+        write_file(&dir.path().join("src/a.rs"));
+        let cwd_through_src = dir.path().join("src/..");
+
+        let files = walk_files_from(dir.path(), &[&cwd_through_src], &["src/"]);
+
+        assert_eq!(
+            files,
+            vec![cwd_through_src.join("main.rs")],
+            "src/.. is the cwd, not src: only what is under src/ may be skipped"
+        );
+    }
+
+    #[test]
+    fn test_issue_275_excluded_directory_argument_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("vendor/sub/lib.js"));
+
+        for argument in ["vendor", "vendor/sub"] {
+            let files = walk_files_from(dir.path(), &[&dir.path().join(argument)], &["vendor/"]);
+            assert!(
+                files.is_empty(),
+                "{argument} is excluded, so nothing under it may be walked: {files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_issue_275_pattern_is_anchored_at_cwd_under_a_directory_argument() {
+        let dir = TempDir::new().unwrap();
+        let kept = dir.path().join("src/a.rs");
+        let elsewhere = dir.path().join("other/src/gen/y.rs");
+        for file in [&kept, &elsewhere, &dir.path().join("src/gen/x.rs")] {
+            write_file(file);
+        }
+
+        let files = walk_files_from(dir.path(), &[&dir.path().join("src")], &["src/gen/"]);
+        assert_eq!(files, vec![kept]);
+
+        let files = walk_files_from(dir.path(), &[&dir.path().join("other")], &["src/gen/"]);
+        assert_eq!(
+            files,
+            vec![elsewhere],
+            "src/gen/ names <cwd>/src/gen, not other/src/gen"
+        );
+    }
+
+    #[test]
+    fn test_issue_275_anchored_exclude_wins_over_tracked_file_under_directory_argument() {
+        let dir = TempDir::new().unwrap();
+        git_init(dir.path());
+        write_file(&dir.path().join("conf/tracked.env"));
+        git_in(dir.path(), ["add", "-f", "conf/tracked.env"]);
+        fs::write(dir.path().join(".gitignore"), "tracked.env\n").unwrap();
+
+        let files = walk_files_from(
+            dir.path(),
+            &[&dir.path().join("conf")],
+            &["conf/tracked.env"],
+        );
+
+        assert!(
+            files.is_empty(),
+            "the tracked-file rescue must anchor the pattern at the cwd too: {files:?}"
         );
     }
 
