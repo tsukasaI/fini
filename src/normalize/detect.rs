@@ -26,11 +26,17 @@ struct SecretPattern {
     hint: &'static str,
 }
 
+const PRIVATE_KEY_HINT: &str = "private key";
+
+/// The END line of any PEM private key, whatever its type label.
+static PRIVATE_KEY_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-----END\s+([A-Z0-9]+\s+)*PRIVATE\s+KEY-----").unwrap());
+
 static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
         SecretPattern {
             regex: Regex::new(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap(),
-            hint: "private key",
+            hint: PRIVATE_KEY_HINT,
         },
         SecretPattern {
             regex: Regex::new(
@@ -301,9 +307,15 @@ fn strip_mask_ignorable(text: &str) -> Cow<'_, str> {
 /// position 0 included), regardless of `--keep-zero-width`, so they cannot
 /// split a secret and leak the raw line (issue #156). The raw line is matched
 /// as well, since stripping can switch a match off (see `is_mask_ignorable`).
+///
+/// A private key is masked as a block, from its BEGIN line through the next
+/// END line: only the BEGIN line matches a pattern, and the base64 body
+/// under it is the actual secret (issue #266). With no END line the block
+/// runs to the end of the content, which over-masks rather than leaks.
 pub(super) fn mask_secret_lines(content: &str) -> String {
     let patterns = &*SECRET_PATTERNS;
     let mut out = String::with_capacity(content.len());
+    let mut in_private_key = false;
 
     for line in content.split_inclusive('\n') {
         let text = line.strip_suffix('\n').unwrap_or(line);
@@ -311,12 +323,19 @@ pub(super) fn mask_secret_lines(content: &str) -> String {
             Cow::Owned(s) => Some(s),
             Cow::Borrowed(_) => None,
         };
-        let hint = patterns
-            .iter()
-            .find(|p| {
-                p.regex.is_match(text) || stripped.as_deref().is_some_and(|s| p.regex.is_match(s))
-            })
-            .map(|p| p.hint);
+        let matches = |regex: &Regex| {
+            regex.is_match(text) || stripped.as_deref().is_some_and(|s| regex.is_match(s))
+        };
+        let hint = if in_private_key {
+            Some(PRIVATE_KEY_HINT)
+        } else {
+            patterns.iter().find(|p| matches(&p.regex)).map(|p| p.hint)
+        };
+        if in_private_key || hint == Some(PRIVATE_KEY_HINT) {
+            // A key on one line (BEGIN ... END, as in a JSON string) opens
+            // no block.
+            in_private_key = !matches(&PRIVATE_KEY_END);
+        }
 
         match hint {
             Some(hint) => {
@@ -786,6 +805,76 @@ mod tests {
         assert!(!masked.contains("hunter\u{200B}2hunter2"));
         assert!(!masked.contains("hunter2hunter2"));
         assert!(masked.contains("[line masked: potential hardcoded secret]"));
+    }
+
+    const MASKED_KEY_LINE: &str = "[line masked: potential private key]";
+
+    // issue #266
+    #[test]
+    fn test_mask_secret_lines_masks_private_key_block_through_end_line() {
+        let content = "before\n\
+            -----BEGIN RSA PRIVATE KEY-----\n\
+            FAKEBODY0001 \n\
+            FAKEBODY0002\n\
+            -----END RSA PRIVATE KEY-----\n\
+            after\n";
+        let masked = mask_secret_lines(content);
+        assert_eq!(
+            masked,
+            format!(
+                "before\n{}after\n",
+                format!("{MASKED_KEY_LINE}\n").repeat(4)
+            ),
+            "every line of the block is masked, and nothing outside it"
+        );
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_crlf_private_key_block() {
+        let content =
+            "-----BEGIN PRIVATE KEY-----\r\nFAKEBODY0001\r\n-----END PRIVATE KEY-----\r\nafter\r\n";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("FAKEBODY"), "{masked:?}");
+        assert!(masked.ends_with("after\r\n"), "{masked:?}");
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_unterminated_private_key_to_the_end() {
+        let masked = mask_secret_lines("-----BEGIN PRIVATE KEY-----\nFAKEBODY0001\nFAKEBODY0002");
+        assert_eq!(
+            masked,
+            format!("{MASKED_KEY_LINE}\n{MASKED_KEY_LINE}\n{MASKED_KEY_LINE}")
+        );
+    }
+
+    #[test]
+    fn test_mask_secret_lines_single_line_private_key_opens_no_block() {
+        let content =
+            "key = \"-----BEGIN PRIVATE KEY-----\\nFAKE\\n-----END PRIVATE KEY-----\"\nafter\n";
+        assert_eq!(
+            mask_secret_lines(content),
+            format!("{MASKED_KEY_LINE}\nafter\n")
+        );
+    }
+
+    #[test]
+    fn test_mask_secret_lines_end_line_split_by_invisible_character_closes_block() {
+        let content =
+            "-----BEGIN PRIVATE KEY-----\nFAKEBODY0001\n-----END PRI\u{200D}VATE KEY-----\nafter\n";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("FAKEBODY"), "{masked:?}");
+        assert!(masked.ends_with("after\n"), "{masked:?}");
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_two_private_key_blocks() {
+        let content = "-----BEGIN PRIVATE KEY-----\nFAKEBODY0001\n-----END PRIVATE KEY-----\n\
+            between\n\
+            -----BEGIN RSA PRIVATE KEY-----\nFAKEBODY0002\n-----END RSA PRIVATE KEY-----\n";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("FAKEBODY"), "{masked:?}");
+        assert_eq!(masked.matches("between\n").count(), 1, "{masked:?}");
+        assert_eq!(masked.matches(MASKED_KEY_LINE).count(), 6, "{masked:?}");
     }
 
     #[test]

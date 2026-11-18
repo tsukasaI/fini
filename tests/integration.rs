@@ -550,6 +550,34 @@ fn test_invalid_config_toml_exits_2() {
     assert!(stderr.contains("Error"), "stderr: {stderr}");
 }
 
+// issue #243
+#[test]
+fn test_invalid_config_toml_escapes_terminal_controls() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("fini.toml"), "x = \x1b[2J oops\r\n").unwrap();
+    fs::write(dir.path().join("test.txt"), "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--check")
+        .arg(".")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        !output.stderr.contains(&0x1b),
+        "raw ESC in stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("\\x1b[2J"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("\n  |"),
+        "the toml snippet must keep its line layout: {stderr}"
+    );
+}
+
 #[test]
 fn test_config_unknown_key_exits_2() {
     // A typo'd key (e.g. max_blank_line instead of max_blank_lines) must be
@@ -1518,6 +1546,46 @@ fn test_check_diff_masks_secret_split_by_zero_width_in_file_mode() {
         assert!(
             stdout.contains("[line masked: potential hardcoded secret]"),
             "masked placeholder missing (keep_zero_width={keep}): {stdout}"
+        );
+    }
+}
+
+// issue #266: only the BEGIN line matches a pattern, but the key body under
+// it is the secret.
+#[test]
+fn test_diff_masks_the_whole_private_key_block() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("key.txt");
+
+    for mode in [&["--check", "--diff"][..], &["--diff"][..]] {
+        // Rewritten each round: the fix-mode run changes the file.
+        fs::write(
+            &file,
+            "-----BEGIN RSA PRIVATE KEY-----\nFAKEFAKEFAKE0001 \nFAKEFAKEFAKE0002 \n-----END RSA PRIVATE KEY-----\ntrailing \n",
+        )
+        .unwrap();
+        let output = fini_cmd()
+            .args(mode)
+            .arg("--no-color")
+            .arg(&file)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for text in [&stdout, &stderr] {
+            assert!(
+                !text.contains("FAKEFAKEFAKE"),
+                "key body leaked ({mode:?}): {text}"
+            );
+        }
+        assert!(
+            stdout.contains("[line masked: potential private key]"),
+            "masked placeholder missing ({mode:?}): {stdout}"
+        );
+        assert!(
+            stdout.contains("-trailing \n+trailing\n"),
+            "a change after the END line must still be shown ({mode:?}): {stdout}"
         );
     }
 }
