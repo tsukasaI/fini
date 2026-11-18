@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Weekly, so a new advisory against an unchanged Cargo.lock is noticed
+  # without waiting for the next push.
+  schedule:
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
@@ -14,13 +18,18 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # macOS too: release binaries are built for it, and some tests only
+        # run there.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --locked --verbose
 
   clippy:
     runs-on: ubuntu-latest
@@ -31,7 +40,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
   fmt:
     runs-on: ubuntu-latest
