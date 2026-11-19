@@ -400,32 +400,38 @@ fn test_cli_overrides_config_file() {
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join("fini.toml"),
-        "[normalize]\nmax_blank_lines = 3\n",
+        "[normalize]\nmax_blank_lines = 1\n",
     )
     .unwrap();
     let file = dir.path().join("test.txt");
     let three_blank_lines = "a\n\n\n\nb\n";
-    fs::write(&file, three_blank_lines).unwrap();
+    let run = |flags: &[&str]| -> String {
+        fs::write(&file, three_blank_lines).unwrap();
+        let output = fini_cmd()
+            .current_dir(dir.path())
+            .args(flags)
+            .arg("test.txt")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{flags:?}: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(&file).unwrap()
+    };
 
-    fini_cmd()
-        .current_dir(dir.path())
-        .arg("test.txt")
-        .output()
-        .unwrap();
     assert_eq!(
-        fs::read_to_string(&file).unwrap(),
-        three_blank_lines,
-        "three blank lines are within the config file's limit"
-    );
-
-    fini_cmd()
-        .current_dir(dir.path())
-        .args(["--max-blank-lines", "1", "test.txt"])
-        .output()
-        .unwrap();
-    assert_eq!(
-        fs::read_to_string(&file).unwrap(),
+        run(&[]),
         "a\n\nb\n",
+        "the config file's limit must apply (the default is no limit)"
+    );
+    // The looser value on the CLI: a "stricter value wins" merge would
+    // still collapse the blank lines.
+    assert_eq!(
+        run(&["--max-blank-lines", "3"]),
+        three_blank_lines,
         "the CLI limit must win over the config file's"
     );
 }
