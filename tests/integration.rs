@@ -398,6 +398,47 @@ fix_code_blocks = true
 #[test]
 fn test_cli_overrides_config_file() {
     let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("fini.toml"),
+        "[normalize]\nmax_blank_lines = 1\n",
+    )
+    .unwrap();
+    let file = dir.path().join("test.txt");
+    let three_blank_lines = "a\n\n\n\nb\n";
+    let run = |flags: &[&str]| -> String {
+        fs::write(&file, three_blank_lines).unwrap();
+        let output = fini_cmd()
+            .current_dir(dir.path())
+            .args(flags)
+            .arg("test.txt")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{flags:?}: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(&file).unwrap()
+    };
+
+    assert_eq!(
+        run(&[]),
+        "a\n\nb\n",
+        "the config file's limit must apply (the default is no limit)"
+    );
+    // The looser value on the CLI: a "stricter value wins" merge would
+    // still collapse the blank lines.
+    assert_eq!(
+        run(&["--max-blank-lines", "3"]),
+        three_blank_lines,
+        "the CLI limit must win over the config file's"
+    );
+}
+
+#[test]
+fn test_config_file_keeps_zero_width() {
+    let dir = TempDir::new().unwrap();
 
     // Create config file with remove_zero_width = false
     let config_path = dir.path().join("fini.toml");
@@ -668,8 +709,8 @@ fn test_cli_detects_long_lines() {
         .output()
         .unwrap();
 
-    // Should exit with 1 (problems found)
-    assert!(!output.status.success());
+    // Exactly 1: a rejected flag would exit 2 and still be "not success".
+    assert_eq!(output.status.code(), Some(1));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("too long"));
@@ -709,8 +750,65 @@ fn test_cli_strict_debug_includes_console_error() {
         .output()
         .unwrap();
 
-    // Should exit with 1 (console.error flagged in strict mode)
-    assert!(!output.status.success());
+    // Exactly 1: a rejected flag would exit 2 and still be "not success".
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("debug code 'console.error'"),
+        "console.error must be flagged in strict mode: {stdout:?}"
+    );
+}
+
+#[test]
+fn test_each_no_detect_flag_turns_off_exactly_its_detection() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("all.js");
+    fs::write(
+        &file,
+        "// TODO: a\n// FIXME: b\nconsole.log(c);\npassword = \"hunter2hunter2\"\n",
+    )
+    .unwrap();
+    let detections = [
+        ("--no-detect-todos", "TODO comment"),
+        ("--no-detect-fixmes", "FIXME comment"),
+        ("--no-detect-debug", "debug code"),
+        ("--no-detect-secrets", "potential secret"),
+    ];
+
+    for (flag, disabled) in detections {
+        let output = fini_cmd()
+            .args(["--check", flag])
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{flag}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for (_, label) in detections {
+            assert_eq!(
+                stdout.contains(label),
+                label != disabled,
+                "{flag} must turn off {disabled:?} and nothing else: {stdout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_keep_leading_blanks_and_fix_code_blocks_flags() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    let run = |content: &str, flags: &[&str]| -> String {
+        fs::write(&file, content).unwrap();
+        let output = fini_cmd().args(flags).arg(&file).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{flags:?}");
+        fs::read_to_string(&file).unwrap()
+    };
+
+    assert_eq!(run("\n\nx\n", &[]), "x\n");
+    assert_eq!(run("\n\nx\n", &["--keep-leading-blanks"]), "\n\nx\n");
+
+    assert_eq!(run("```rust\nx\n```\n", &[]), "```rust\nx\n```\n");
+    assert_eq!(run("```rust\nx\n```\n", &["--fix-code-blocks"]), "x\n");
 }
 
 #[test]
@@ -1918,8 +2016,8 @@ fn test_suppressed_secret_leaves_audit_trail() {
         "missing stderr audit trail: {stderr}"
     );
     assert!(
-        stderr.contains(":1"),
-        "audit trail must include the line number"
+        stderr.contains("test.py:1 potential secret"),
+        "audit trail must include the file and line number: {stderr}"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -2307,7 +2405,8 @@ fn test_stdin_check_mode_detects_problems() {
     child.stdin.take().unwrap().write_all(b"hello   ").unwrap();
 
     let output = child.wait_with_output().unwrap();
-    assert!(!output.status.success());
+    // Exactly 1: a rejected flag would exit 2 and still be "not success".
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]

@@ -135,14 +135,20 @@ mod tests {
 
     #[test]
     fn test_find_config_stops_at_git_root() {
-        let dir = TempDir::new().unwrap();
-        fs::create_dir(dir.path().join(".git")).unwrap();
-
-        let subdir = dir.path().join("subdir");
+        let above_repo = TempDir::new().unwrap();
+        // The file the walk must not reach: without the stop it would be
+        // found two levels up.
+        fs::write(above_repo.path().join("fini.toml"), "[normalize]\n").unwrap();
+        let repo = above_repo.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let subdir = repo.join("subdir");
         fs::create_dir(&subdir).unwrap();
 
         let found = find_config_file(&subdir);
-        assert_eq!(found, None);
+        assert_eq!(
+            found, None,
+            "a fini.toml above the git root belongs to something else"
+        );
     }
 
     // issue #86: outside a git repo, discovery must not walk upward at all

@@ -1315,7 +1315,7 @@ mod tests {
     }
 
     #[test]
-    fn test_code_fence_with_numbers_not_removed() {
+    fn test_code_fence_with_numbers_is_removed() {
         let config = NormalizeConfig {
             fix_code_blocks: true,
             ..NormalizeConfig::default()
