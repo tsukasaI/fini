@@ -38,8 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-            echo "::error::Tag $TAG does not match expected format vX.Y.Z[-prerelease]" >&2
+          # Stable tags only: the formula never points at a pre-release, also
+          # when this workflow is started by hand.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $TAG does not match expected format vX.Y.Z (pre-releases do not update the formula)" >&2
             exit 1
           fi
 

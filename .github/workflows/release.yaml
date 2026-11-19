@@ -19,11 +19,17 @@ jobs:
           fetch-depth: 0
 
       - name: Verify the tagged commit is on main
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+        shell: bash
+        run: |
+          set -euo pipefail
+          # main takes squash merges, so a tag put on a branch commit before
+          # the merge names a commit main never contains.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main; tag the merged commit on main" >&2
+            exit 1
+          fi
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04
-
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Run tests
         run: cargo test --locked
