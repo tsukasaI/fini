@@ -28,14 +28,32 @@ struct SecretPattern {
 
 const PRIVATE_KEY_HINT: &str = "private key";
 
+static PRIVATE_KEY_BEGIN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap());
+
 /// The END line of any PEM private key, whatever its type label.
 static PRIVATE_KEY_END: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-----END\s+([A-Z0-9]+\s+)*PRIVATE\s+KEY-----").unwrap());
 
+/// Whether a private key block is open after `text`, given whether one was
+/// open before it; `None` when the line has no marker and none was open.
+/// The last marker on the line decides: a key on one line (BEGIN ... END,
+/// as in a JSON string) leaves no block open, while `END ... BEGIN` (two
+/// key files joined without a newline) opens the next.
+fn private_key_open_after(text: &str, was_open: bool) -> Option<bool> {
+    let last_start = |regex: &Regex| regex.find_iter(text).last().map(|m| m.start());
+    match (last_start(&PRIVATE_KEY_BEGIN), last_start(&PRIVATE_KEY_END)) {
+        (Some(begin), Some(end)) => Some(begin > end),
+        (Some(_), None) => Some(true),
+        (None, Some(_)) => Some(false),
+        (None, None) => was_open.then_some(true),
+    }
+}
+
 static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
         SecretPattern {
-            regex: Regex::new(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap(),
+            regex: PRIVATE_KEY_BEGIN.clone(),
             hint: PRIVATE_KEY_HINT,
         },
         SecretPattern {
@@ -331,11 +349,14 @@ pub(super) fn mask_secret_lines(content: &str) -> String {
         } else {
             patterns.iter().find(|p| matches(&p.regex)).map(|p| p.hint)
         };
-        if in_private_key || hint == Some(PRIVATE_KEY_HINT) {
-            // A key on one line (BEGIN ... END, as in a JSON string) opens
-            // no block.
-            in_private_key = !matches(&PRIVATE_KEY_END);
-        }
+        // The stripped text first: a marker split by an invisible character
+        // only shows there. The raw text is the fallback because stripping
+        // can also remove a marker's own whitespace (see `is_mask_ignorable`).
+        in_private_key = stripped
+            .as_deref()
+            .and_then(|s| private_key_open_after(s, false))
+            .or_else(|| private_key_open_after(text, in_private_key))
+            .unwrap_or(false);
 
         match hint {
             Some(hint) => {
@@ -864,6 +885,18 @@ mod tests {
         let masked = mask_secret_lines(content);
         assert!(!masked.contains("FAKEBODY"), "{masked:?}");
         assert!(masked.ends_with("after\n"), "{masked:?}");
+    }
+
+    #[test]
+    fn test_mask_secret_lines_end_and_begin_on_one_line_opens_the_next_block() {
+        // Two key files joined without a newline in between.
+        let content = "-----BEGIN RSA PRIVATE KEY-----\nFAKEBODY0001\n\
+            -----END RSA PRIVATE KEY----------BEGIN RSA PRIVATE KEY-----\n\
+            FAKEBODY0002\n-----END RSA PRIVATE KEY-----\nafter\n";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("FAKEBODY"), "{masked:?}");
+        assert_eq!(masked.matches(MASKED_KEY_LINE).count(), 5, "{masked:?}");
+        assert!(masked.ends_with("]\nafter\n"), "{masked:?}");
     }
 
     #[test]

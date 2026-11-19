@@ -340,7 +340,9 @@ fn check_editorconfig_warnings() {
     {
         if let Ok(settings) = parse_editorconfig(&editorconfig_path) {
             for warning in check_editorconfig_conflicts(&settings) {
-                eprintln!("Warning: {}", warning);
+                // The warning quotes a value from `.editorconfig`, which the
+                // scanned repository controls.
+                eprintln!("Warning: {}", escape_line_breaks(&warning));
             }
         }
     }

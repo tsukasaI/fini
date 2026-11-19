@@ -554,7 +554,8 @@ fn test_invalid_config_toml_exits_2() {
 #[test]
 fn test_invalid_config_toml_escapes_terminal_controls() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("fini.toml"), "x = \x1b[2J oops\r\n").unwrap();
+    // ESC, a CR in the middle of the line, and a CRLF line ending.
+    fs::write(dir.path().join("fini.toml"), "x = \x1b[2J o\rops\r\n").unwrap();
     fs::write(dir.path().join("test.txt"), "hello\n").unwrap();
 
     let output = fini_cmd()
@@ -565,16 +566,81 @@ fn test_invalid_config_toml_escapes_terminal_controls() {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(2));
+    for raw in [0x1b_u8, b'\r'] {
+        assert!(
+            !output.stderr.contains(&raw),
+            "raw control byte {raw:#04x} in stderr: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("\\x1b[2J"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("o\\rops\n"),
+        "the lone CR is shown escaped and the CRLF's CR is dropped: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("\n    |"),
+        "the toml snippet must keep its line layout: {stderr}"
+    );
+}
+
+#[test]
+fn test_invalid_config_toml_cannot_forge_an_output_line() {
+    let dir = TempDir::new().unwrap();
+    // toml decodes the `\n` in the quoted key and echoes the key in its
+    // "unknown field" message.
+    fs::write(dir.path().join("fini.toml"), "\"zz\\nError: forged\" = 1\n").unwrap();
+    fs::write(dir.path().join("test.txt"), "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .arg("--check")
+        .arg(".")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("forged"), "stderr: {stderr}");
+    let lines_at_column_0: Vec<&str> = stderr
+        .lines()
+        .skip(1)
+        .filter(|line| !line.starts_with(' '))
+        .collect();
+    assert!(
+        lines_at_column_0.is_empty(),
+        "only the first line of the error may start at column 0: {stderr:?}"
+    );
+}
+
+#[test]
+fn test_editorconfig_warning_escapes_terminal_controls() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".editorconfig"),
+        "[*]\nend_of_line = \x1b[2Jcrlf\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("test.txt"), "hello\n").unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "."])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
     assert!(
         !output.stderr.contains(&0x1b),
         "raw ESC in stderr: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("\\x1b[2J"), "stderr: {stderr}");
+    // The value is lowercased before it is quoted in the warning.
     assert!(
-        stderr.contains("\n  |"),
-        "the toml snippet must keep its line layout: {stderr}"
+        stderr.contains("end_of_line=\\x1b[2jcrlf"),
+        "the warning must still show the value, escaped: {stderr:?}"
     );
 }
 
@@ -1556,14 +1622,14 @@ fn test_check_diff_masks_secret_split_by_zero_width_in_file_mode() {
 fn test_diff_masks_the_whole_private_key_block() {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("key.txt");
+    // Written once: neither mode below writes the file.
+    fs::write(
+        &file,
+        "-----BEGIN RSA PRIVATE KEY-----\nFAKEFAKEFAKE0001 \nFAKEFAKEFAKE0002 \n-----END RSA PRIVATE KEY-----\ntrailing \n",
+    )
+    .unwrap();
 
     for mode in [&["--check", "--diff"][..], &["--diff"][..]] {
-        // Rewritten each round: the fix-mode run changes the file.
-        fs::write(
-            &file,
-            "-----BEGIN RSA PRIVATE KEY-----\nFAKEFAKEFAKE0001 \nFAKEFAKEFAKE0002 \n-----END RSA PRIVATE KEY-----\ntrailing \n",
-        )
-        .unwrap();
         let output = fini_cmd()
             .args(mode)
             .arg("--no-color")
@@ -1586,6 +1652,11 @@ fn test_diff_masks_the_whole_private_key_block() {
         assert!(
             stdout.contains("-trailing \n+trailing\n"),
             "a change after the END line must still be shown ({mode:?}): {stdout}"
+        );
+        assert_eq!(
+            stdout.matches("potential secret (private key)").count(),
+            1,
+            "detection stays one finding, at the BEGIN line ({mode:?}): {stdout}"
         );
     }
 }
