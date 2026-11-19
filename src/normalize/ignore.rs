@@ -108,25 +108,23 @@ pub(super) fn parse_ignore_directives(content: &str, line_map: &[usize]) -> Igno
     map
 }
 
+/// The kinds a directive names, or `None` for "all kinds".
+///
+/// Each comma-separated piece contributes its leading identifier (letters,
+/// digits, `-`) and nothing after it. Not the whole piece: the directive
+/// sits in a comment, so it is followed by whatever closes that comment
+/// (`*/`, `-->`, `#}`, `*)`, `%>`) or by a reason (`todo -- legacy`), and a
+/// piece read whole became an unknown kind that suppressed nothing.
 fn parse_kind_list(line: &str, offset: usize) -> Option<HashSet<String>> {
-    let rest = line[offset..].trim();
-    if rest.is_empty() || rest.starts_with("*/") || rest.starts_with("-->") {
-        return None;
-    }
-
-    let kinds: HashSet<String> = rest
+    let kinds: HashSet<String> = line[offset..]
         .split(',')
-        .filter_map(|s| {
-            let s = s
-                .trim()
-                .trim_end_matches("*/")
-                .trim_end_matches("-->")
-                .trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_lowercase())
-            }
+        .filter_map(|piece| {
+            let piece = piece.trim_start();
+            let id_len = piece
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .unwrap_or(piece.len());
+            let id = piece[..id_len].trim_matches('-');
+            (!id.is_empty()).then(|| id.to_lowercase())
         })
         .collect();
 
@@ -222,6 +220,48 @@ mod tests {
         let map = parse_ignore_directives(content, &identity_line_map(content));
         assert!(map.is_ignored(1, &ProblemKind::TodoComment));
         assert!(!map.is_ignored(1, &ProblemKind::FixmeComment));
+    }
+
+    // issue #269: whatever closes the comment is not a kind.
+    #[test]
+    fn other_comment_terminators_mean_all_kinds() {
+        for content in [
+            "{# TODO: x fini:ignore #}\n",
+            "(* TODO: x fini:ignore *)\n",
+            "<%# TODO: x fini:ignore %>\n",
+            "# TODO: x fini:ignore -- kept on purpose\n",
+        ] {
+            let map = parse_ignore_directives(content, &identity_line_map(content));
+            assert!(map.is_ignored(1, &ProblemKind::TodoComment), "{content:?}");
+            assert!(
+                map.is_ignored(1, &ProblemKind::FixmeComment),
+                "no kind named means all kinds: {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_after_a_kind_is_not_part_of_it() {
+        for content in [
+            "# TODO: x fini:ignore todo -- kept on purpose\n",
+            "{# TODO: x fini:ignore todo #}\n",
+            "(* TODO: x fini:ignore todo, debug *)\n",
+        ] {
+            let map = parse_ignore_directives(content, &identity_line_map(content));
+            assert!(map.is_ignored(1, &ProblemKind::TodoComment), "{content:?}");
+            assert!(
+                !map.is_ignored(1, &ProblemKind::FixmeComment),
+                "only the named kinds: {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_first_word_still_suppresses_nothing() {
+        // A typo must not widen the directive to every kind.
+        let content = "// TODO: x fini:ignore tood\n";
+        let map = parse_ignore_directives(content, &identity_line_map(content));
+        assert!(!map.is_ignored(1, &ProblemKind::TodoComment));
     }
 
     #[test]

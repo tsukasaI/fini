@@ -4363,3 +4363,65 @@ fn test_issue_279_ignore_next_line_is_audited_and_not_counted_as_a_secret() {
         "a bidi control is not a secret: {stdout:?}"
     );
 }
+
+// issue #269: the README says skipped symlinks are counted and listed, which
+// held only for a link passed by name.
+#[cfg(unix)]
+#[test]
+fn test_symlink_inside_a_walked_directory_is_counted_and_listed() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("d")).unwrap();
+    fs::write(dir.path().join("d/real.txt"), "ok\n").unwrap();
+    std::os::unix::fs::symlink("real.txt", dir.path().join("d/link.txt")).unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "--verbose", "--no-color", "d"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Skipping symlink: d/link.txt"),
+        "{stdout:?}"
+    );
+    assert!(
+        stdout.contains("1 files skipped (see --verbose)"),
+        "{stdout:?}"
+    );
+    assert_eq!(
+        fs::read_link(dir.path().join("d/link.txt")).unwrap(),
+        std::path::PathBuf::from("real.txt"),
+        "the link itself must be left alone"
+    );
+}
+
+#[test]
+fn test_ignore_directive_works_in_other_comment_styles() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("styles.txt");
+    fs::write(
+        &file,
+        "{# TODO: one fini:ignore #}\n(* TODO: two fini:ignore *)\n# TODO: three fini:ignore todo -- reason\n",
+    )
+    .unwrap();
+
+    let output = fini_cmd()
+        .args(["--check", "--no-color"])
+        .arg(&file)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "all three TODOs are suppressed: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3 problems suppressed by fini:ignore"),
+        "{stdout:?}"
+    );
+}

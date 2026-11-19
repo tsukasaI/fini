@@ -35,6 +35,15 @@ else
   SHA256() { shasum -a 256 "$@"; }
 fi
 
+# Every tarball hashed below must be listed: `-c` only checks the lines that
+# are there, so a checksums.txt missing one would leave that tarball unverified.
+for target in x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+  if ! grep -q "  fini-$target\.tar\.gz\$" "$ASSETS_DIR/checksums.txt"; then
+    echo "error: checksums.txt has no entry for fini-$target.tar.gz" >&2
+    exit 1
+  fi
+done
+
 (cd "$ASSETS_DIR" && SHA256 -c checksums.txt >&2)
 
 sha_for() {
