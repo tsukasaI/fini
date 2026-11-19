@@ -28,12 +28,16 @@ struct SecretPattern {
 
 const PRIVATE_KEY_HINT: &str = "private key";
 
-static PRIVATE_KEY_BEGIN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap());
+/// The BEGIN line of a private key of any type: PKCS#8 (no label), `RSA`,
+/// `EC`, `DSA`, `OPENSSH`, `ENCRYPTED`, and the `PGP ... BLOCK` form.
+static PRIVATE_KEY_BEGIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-----BEGIN\s+([A-Z0-9]+\s+)*PRIVATE\s+KEY(\s+BLOCK)?-----").unwrap()
+});
 
-/// The END line of any PEM private key, whatever its type label.
-static PRIVATE_KEY_END: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-----END\s+([A-Z0-9]+\s+)*PRIVATE\s+KEY-----").unwrap());
+/// The END line of any private key, whatever its type label.
+static PRIVATE_KEY_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-----END\s+([A-Z0-9]+\s+)*PRIVATE\s+KEY(\s+BLOCK)?-----").unwrap()
+});
 
 /// Whether a private key block is open after `text`, given whether one was
 /// open before it; `None` when the line has no marker and none was open.
@@ -57,10 +61,9 @@ static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             hint: PRIVATE_KEY_HINT,
         },
         SecretPattern {
-            regex: Regex::new(
-                r#"(?i)(aws[_-]?)?access[_-]?key[_-]?id\s*[=:]\s*["']?AKIA[A-Z0-9]{16}["']?"#,
-            )
-            .unwrap(),
+            // The key id on its own, with or without an `access_key_id =`
+            // label: the prefix plus 16 characters is specific enough.
+            regex: Regex::new(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b").unwrap(),
             hint: "AWS access key",
         },
         SecretPattern {
@@ -71,8 +74,22 @@ static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             hint: "AWS secret key",
         },
         SecretPattern {
+            // `["']?` after the key name covers a quoted key (JSON, a
+            // Python dict); `=` in the value covers base64 padding.
             regex: Regex::new(
-                r#"(?i)(password|passwd|secret[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token)\s*[=:]\s*["'][a-zA-Z0-9_\-/+@#$%^&*!~.]{8,}["']"#,
+                r#"(?i)(password|passwd|secret[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token)["']?\s*[=:]\s*["'][a-zA-Z0-9_\-/+@#$%^&*!~.=]{8,}["']"#,
+            )
+            .unwrap(),
+            hint: "hardcoded secret",
+        },
+        SecretPattern {
+            // An unquoted value, only in the dotenv/shell shape: an
+            // upper-case name, `=` with no spaces around it, and a value that
+            // does not start like a placeholder or an expression. Anything
+            // looser (`password = user_input`, `password: string`) would
+            // flag ordinary code and schemas.
+            regex: Regex::new(
+                r#"(?m)^\s*(export\s+)?[A-Z0-9_]*(PASSWORD|PASSWD|SECRET_KEY|API_KEY|AUTH_TOKEN|ACCESS_TOKEN)[A-Z0-9_]*=[^\s"'$<{(\[][^\s]{7,}\s*$"#,
             )
             .unwrap(),
             hint: "hardcoded secret",
@@ -82,11 +99,13 @@ static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             hint: "bearer token",
         },
         SecretPattern {
-            regex: Regex::new(r"ghp_[a-zA-Z0-9]{36,}").unwrap(),
+            // Classic tokens (`ghp_` personal, `gho_` OAuth, `ghu_`/`ghs_`
+            // app, `ghr_` refresh) and fine-grained `github_pat_` tokens.
+            regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}|github_pat_[a-zA-Z0-9_]{22,}").unwrap(),
             hint: "GitHub token",
         },
         SecretPattern {
-            regex: Regex::new(r"xox[bpa]-[a-zA-Z0-9\-]{10,}").unwrap(),
+            regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
             hint: "Slack token",
         },
         SecretPattern {
@@ -123,6 +142,13 @@ fn is_valid_marker(line: &str, marker: &str) -> bool {
                 bytes.get(i + m.len()),
                 Some(b':' | b' ' | b'\t' | b'(') | None
             )
+            // Not the previous byte: in `método` it is the tail of `é`, which
+            // is not ASCII but is a letter. `i` starts an ASCII match, so
+            // it is a char boundary.
+            && !line[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
     })
 }
 
@@ -908,6 +934,94 @@ mod tests {
         assert!(!masked.contains("FAKEBODY"), "{masked:?}");
         assert_eq!(masked.matches("between\n").count(), 1, "{masked:?}");
         assert_eq!(masked.matches(MASKED_KEY_LINE).count(), 6, "{masked:?}");
+    }
+
+    fn secret_hints(content: &str) -> Vec<&'static str> {
+        detect_secret_patterns(content, &identity_line_map(content))
+            .into_iter()
+            .filter_map(|p| match p.kind {
+                ProblemKind::SecretPattern { hint } => Some(hint),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // issue #267
+    #[test]
+    fn test_common_secret_shapes_are_detected() {
+        for (line, hint) in [
+            ("\"password\": \"hunter2hunter2\"", "hardcoded secret"),
+            ("'api_key': 'abcd1234efgh5678'", "hardcoded secret"),
+            ("password = \"dGVzdGRhdGE9PQ==\"", "hardcoded secret"),
+            ("API_KEY=abcd1234efgh5678", "hardcoded secret"),
+            ("export DB_PASSWORD=hunter2hunter2", "hardcoded secret"),
+            ("-----BEGIN OPENSSH PRIVATE KEY-----", "private key"),
+            ("-----BEGIN EC PRIVATE KEY-----", "private key"),
+            ("-----BEGIN DSA PRIVATE KEY-----", "private key"),
+            ("-----BEGIN ENCRYPTED PRIVATE KEY-----", "private key"),
+            ("-----BEGIN PGP PRIVATE KEY BLOCK-----", "private key"),
+            ("gho_0123456789abcdefghijABCDEFGHIJ012345", "GitHub token"),
+            ("ghs_0123456789abcdefghijABCDEFGHIJ012345", "GitHub token"),
+            (
+                "github_pat_11AAAAAAA0abcdefghijkl_0123456789abcdefghij",
+                "GitHub token",
+            ),
+            ("AKIAIOSFODNN7EXAMPLE", "AWS access key"),
+            ("aws_access_key_id = ASIAIOSFODNN7EXAMPLE", "AWS access key"),
+            ("xoxs-0123456789-abcdef", "Slack token"),
+        ] {
+            assert_eq!(secret_hints(&format!("{line}\n")), [hint], "{line}");
+        }
+    }
+
+    #[test]
+    fn test_unquoted_values_outside_the_dotenv_shape_are_not_secrets() {
+        for line in [
+            "password = user_input",
+            "password: string",
+            "api_key = get_api_key()",
+            "API_KEY = load_key_from_vault()",
+            "API_KEY=$OTHER_VARIABLE",
+            "API_KEY=<your-api-key>",
+            "API_KEY=(read from the vault)",
+            "API_KEY=short",
+            "XAKIAIOSFODNN7EXAMPLE",
+            "AKIAIOSFODNN7EXAMPLEX",
+            "-----BEGIN PUBLIC KEY-----",
+            "-----BEGIN CERTIFICATE-----",
+        ] {
+            assert!(
+                secret_hints(&format!("{line}\n")).is_empty(),
+                "{line} must not be reported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_openssh_private_key_block() {
+        let content = "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEBODY0001\n\
+            -----END OPENSSH PRIVATE KEY-----\nafter\n";
+        let masked = mask_secret_lines(content);
+        assert!(!masked.contains("FAKEBODY"), "{masked:?}");
+        assert!(masked.ends_with("]\nafter\n"), "{masked:?}");
+    }
+
+    // A marker glued to a word is part of that word, in any alphabet.
+    #[test]
+    fn test_marker_requires_left_word_boundary() {
+        for content in [
+            "El m\u{e9}todo es simple\n",
+            "MYTODO: later\n",
+            "auto_fixme: x\n",
+        ] {
+            let (todos, fixmes) =
+                detect_todo_and_fixme_comments(content, &identity_line_map(content));
+            assert!(todos.is_empty() && fixmes.is_empty(), "{content:?}");
+        }
+        for content in ["//TODO: x\n", "#TODO x\n", "/*TODO x */\n"] {
+            let (todos, _) = detect_todo_and_fixme_comments(content, &identity_line_map(content));
+            assert_eq!(todos.len(), 1, "{content:?}");
+        }
     }
 
     #[test]
