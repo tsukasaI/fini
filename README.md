@@ -43,7 +43,7 @@ repos:
       - id: fini-check  # Check-only mode (for CI)
 ```
 
-Note: Requires fini to be installed (`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0`, or via Homebrew/Nix).
+Note: Requires fini to be installed (`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0`, or via Homebrew/Nix). `rev` pins the hook definition only: the hook runs whichever `fini` is on your `PATH`, so keep that installation up to date as well.
 
 ## Usage
 
@@ -100,11 +100,22 @@ Create `fini.toml` in your project root (or run `fini --init`):
 # exclude = ["vendor/", "node_modules/", "*.min.js"]
 
 [normalize]
-max_blank_lines = 2        # Limit consecutive blank lines
-remove_zero_width = true   # Remove zero-width characters
-remove_leading_blanks = true
-fix_code_blocks = false    # Remove ``` markers
+max_blank_lines = 2          # Limit consecutive blank lines (default: no limit)
+remove_zero_width = true     # Remove zero-width characters
+remove_leading_blanks = true # Remove blank lines at the start of a file
+fix_code_blocks = false      # Remove ``` markers
+detect_todos = true          # Report TODO comments
+detect_fixmes = true         # Report FIXME comments
+detect_debug = true          # Report debug code (console.log, print, dbg!, ...)
+strict_debug = false         # Also report console.error / eprintln!
+detect_secrets = true        # Report secret patterns
+detect_bidi = true           # Report bidirectional control characters
+# max_line_length = 120      # Report longer lines (default: off)
+max_file_size = 10485760     # Skip larger files, in bytes (default: 10 MiB)
 ```
+
+The values shown are the defaults, except `max_blank_lines` and
+`max_line_length`, which are off unless set.
 
 Exclude patterns (`exclude` here, or `--exclude`) are matched relative to the
 current directory, whatever the argument: with `src/gen/` excluded, `fini .`,
@@ -133,7 +144,20 @@ is checked.
 
 ### .editorconfig
 
-fini reads `.editorconfig` and warns if settings conflict with its fixed behaviors (always trims whitespace, always LF, always adds final newline).
+fini reads `.editorconfig` and warns if settings conflict with its fixed behaviors (always trims whitespace, always LF, always adds final newline). Only the `[*]` section is read; a per-type section such as `[*.md]` is not.
+
+### Fixes that cannot be turned off
+
+Trailing whitespace removal, full-width space (U+3000) conversion and LF line
+endings apply to every file fini processes, and there is no per-file or
+per-type switch for them. In some formats that changes meaning:
+
+- Markdown: two trailing spaces are a hard line break
+- TSV: a trailing tab is an empty last column
+- Japanese prose: U+3000 is used for indentation and between names
+
+Keep such files out with `exclude` (or `--exclude`), which also applies to
+files passed by name.
 
 ## Features
 
@@ -151,7 +175,9 @@ fini reads `.editorconfig` and warns if settings conflict with its fixed behavio
 Files are written atomically (write to a temp file in the same directory,
 then rename over the original), which breaks any other hard link to the
 file - other links keep the pre-fix content, since rename only repoints the
-one directory entry fini wrote to.
+one directory entry fini wrote to. For the same reason the rewritten file
+keeps its permission bits but not its owner (it becomes the user running
+fini) or its extended attributes.
 
 ## Inline Ignore
 
@@ -240,7 +266,8 @@ from `fini.toml` prints a warning to stderr that `--quiet` does not suppress.
   `git init`'d), `.gitignore` files are not consulted at all, and everything
   they'd otherwise exclude is scanned
 - `.ignore` files (ripgrep-style) - honored everywhere, including outside a
-  git repository
+  git repository. One exception: a file git already tracks is scanned even
+  if a `.ignore` file lists it
 
 Skipped binary / non-UTF-8 / symlink files are counted in the run summary;
 use `--verbose` to list them individually with the skip reason. Arguments
@@ -320,6 +347,13 @@ the process is killed by SIGPIPE rather than exiting with a code of its own
 files not yet reached are left unprocessed.
 
 ## Development
+
+```bash
+cargo build                                  # Debug build
+cargo test                                   # Unit and integration tests
+cargo fmt --check                            # Formatting
+cargo clippy --all-targets -- -D warnings    # Lints, as CI runs them
+```
 
 ### Pre-commit Hooks
 
