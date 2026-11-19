@@ -52,14 +52,15 @@ runs:
             exit 1
           fi
         else
-          # Reject anything that isn't a plausible version tag to keep this value
-          # safe to use in URLs and filenames downstream.
-          case "$INPUT_VERSION" in
-            v[0-9]*|[0-9]*) VERSION="$INPUT_VERSION" ;;
-            *)
-              echo "::error::Invalid version '$INPUT_VERSION' (expected vX.Y.Z or X.Y.Z)" >&2
-              exit 1 ;;
-          esac
+          # Reject anything that isn't a version tag to keep this value safe
+          # to use in URLs and filenames downstream. Not a `case` glob:
+          # `v[0-9]*` also accepts `v1/../x`.
+          if [[ ! "$INPUT_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Invalid version '$INPUT_VERSION' (expected vX.Y.Z or X.Y.Z)" >&2
+            exit 1
+          fi
+          # Release tags carry the `v`; `0.7.0` means `v0.7.0`.
+          VERSION="v${INPUT_VERSION#v}"
         fi
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 

@@ -160,7 +160,13 @@ fn walk_paths_from(
         for entry in builder.build() {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    // Symlinks too, not just regular files: `process_file`
+                    // refuses each one and reports it as skipped. Dropped
+                    // here, a link inside a walked directory left no trace.
+                    let is_file_or_symlink = entry
+                        .file_type()
+                        .is_some_and(|ft| ft.is_file() || ft.is_symlink());
+                    if is_file_or_symlink {
                         let entry_path = entry.into_path();
                         if seen.insert(dedup_key(&entry_path, &mut canon_parent_cache)) {
                             all_files.push(Ok(entry_path));

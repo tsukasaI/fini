@@ -52,7 +52,7 @@ fini .                    # Fix current directory
 fini src/main.rs          # Fix specific file
 fini --check .            # Check only, exit 1 if problems
 fini --diff .             # Preview changes
-fini --quiet .            # Output only filenames
+fini --quiet .            # Output only the names of changed or flagged files
 fini -v .                 # Verbose: show all processed files
 fini --init               # Generate fini.toml template
 cat file.txt | fini --stdin  # Read from stdin, output to stdout
@@ -63,7 +63,8 @@ cat file.txt | fini --stdin  # Read from stdin, output to stdout
 ```
 -c, --check             Check only (no modifications), exit 1 if problems found
 -d, --diff              Show changes in diff format
--q, --quiet             Output only modified file names
+-q, --quiet             Output only the names of files that were changed or
+                        have problems
 -v, --verbose           Show all processed files (including clean ones)
 --stdin                 Read from stdin, output to stdout
 --color                 Force colored output
@@ -173,6 +174,11 @@ API_KEY = "sk_test_example"
 | `fini:ignore-next-line secret` | Suppress only listed kinds on the next line |
 
 Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `bidi`
+
+Whatever follows a kind, or follows the directive when no kind is named, is
+not read as a kind unless it starts with a letter or digit: the comment's
+closing marker (`*/`, `-->`, `#}`, `*)`, `%>`) and a reason after `--`
+(`fini:ignore todo -- legacy`) are both fine.
 
 Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading blank lines, consecutive blank lines, code block remnants) are never suppressed, since the content changes regardless. Unrecognized or fix-type kinds have no effect; a directive naming only fix-type kinds (e.g. `fini:ignore fullwidth`) prints a one-time stderr hint per run, naming the first such file and how many more (not with `--quiet`). The hint only fires for files where fini finds at least one problem, because directives are not parsed in otherwise clean files.
 

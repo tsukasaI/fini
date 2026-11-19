@@ -94,4 +94,17 @@ run_script "0.5.0-rc.1" >/dev/null 2>&1
 grep -q 'version "0.5.0-rc.1"' "$FORMULA" || fail "valid pre-release version '0.5.0-rc.1' was not embedded in the formula"
 echo "PASS: valid pre-release version '0.5.0-rc.1' accepted and embedded"
 
+# --- A tarball missing from checksums.txt must stop the run (exit 1), formula untouched ---
+reset_formula
+cp "$ASSETS_DIR/checksums.txt" "$WORKDIR/checksums.full"
+grep -v 'aarch64-unknown-linux-gnu' "$WORKDIR/checksums.full" > "$ASSETS_DIR/checksums.txt"
+set +e
+run_script "0.5.0" >/dev/null 2>&1
+STATUS=$?
+set -e
+cp "$WORKDIR/checksums.full" "$ASSETS_DIR/checksums.txt"
+[ "$STATUS" -eq 1 ] || fail "checksums.txt without one tarball did not exit 1 (got $STATUS)"
+[ "$(cat "$FORMULA")" = "sentinel: pre-existing content" ] || fail "formula file was modified although a tarball was not in checksums.txt"
+echo "PASS: a tarball missing from checksums.txt is rejected with exit 1, formula untouched"
+
 echo "All tests passed."
