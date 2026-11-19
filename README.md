@@ -190,7 +190,10 @@ detections are always reported on stderr with `file:line` (even with
 
 Secret detections are reported hint-only — the matched value is never printed.
 `--diff` output masks lines matching a secret pattern
-(`[line masked: potential …]`), but a secret that no pattern matches will appear
+(`[line masked: potential …]`), and a PEM private key whose BEGIN line is
+detected (`PRIVATE KEY` and `RSA PRIVATE KEY`; other key types are not) is
+masked from that line through its END line, or to the end of the file if
+there is none. A secret that no pattern matches will appear
 verbatim in a diff: be careful publishing CI logs that include `--diff` output.
 
 Disabling secret detection via `fini.toml` (`detect_secrets = false`) prints a

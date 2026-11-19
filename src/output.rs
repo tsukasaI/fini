@@ -23,6 +23,34 @@ pub fn escape_line_breaks(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
+/// Makes a multi-line diagnostic (e.g. a toml parse error with its source
+/// snippet and caret) safe to print while keeping its line structure.
+///
+/// Every control character except `\n` and `\t` is escaped: ESC / C1 could
+/// rewrite the terminal, and a lone `\r` or a backspace could overwrite the
+/// visible line. The `\r` of a CRLF pair is dropped rather than shown.
+///
+/// Lines after the first are indented. The text can hold newlines the
+/// author of the input chose (toml decodes `\n` in a quoted key and echoes
+/// the key in "unknown field"), and indentation keeps such a line from
+/// starting at column 0, where it would read as output of its own.
+pub fn escape_multiline_message(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in escape_terminal_controls(&s.replace("\r\n", "\n"))
+        .trim_end()
+        .chars()
+    {
+        match c {
+            '\n' => out.push_str("\n  "),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push(c),
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// A path's `Display` form, safe to print as a standalone output line.
 /// See `escape_line_breaks`.
 pub fn safe_path_display(path: &Path) -> String {
@@ -619,6 +647,40 @@ pub fn print_summary(result: &RunResult, config: &Config, ctx: &OutputContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_escape_multiline_message_escapes_controls_and_keeps_newline() {
+        assert_eq!(
+            escape_multiline_message("a\x1b[2J\u{85}b\rc\nd"),
+            "a\\x1b[2J\\u{85}b\\rc\n  d"
+        );
+    }
+
+    #[test]
+    fn test_escape_multiline_message_escapes_other_controls_but_not_tab() {
+        assert_eq!(
+            escape_multiline_message("a\x08b\x07c\x7fd\te"),
+            "a\\x08b\\x07c\\x7fd\te"
+        );
+    }
+
+    #[test]
+    fn test_escape_multiline_message_drops_the_cr_of_crlf_only() {
+        assert_eq!(escape_multiline_message("a\r\nb\rc"), "a\n  b\\rc");
+    }
+
+    #[test]
+    fn test_escape_multiline_message_indents_every_line_after_the_first() {
+        assert_eq!(
+            escape_multiline_message("unknown field `zz\nError: forged`\n"),
+            "unknown field `zz\n  Error: forged`",
+            "a line the input chose must not start at column 0"
+        );
+        assert_eq!(
+            escape_multiline_message("line one\n  | x\n"),
+            "line one\n    | x"
+        );
+    }
 
     #[test]
     fn test_safe_path_display_escapes_newline_and_cr() {

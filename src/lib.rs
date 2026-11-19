@@ -17,7 +17,7 @@ pub use normalize::{
     normalize_content, NormalizeConfig, NormalizeResult, Problem, ProblemKind, FIX_KIND_IGNORE_HINT,
 };
 pub use output::{
-    escape_line_breaks, print_check_report_to, safe_path_display,
+    escape_line_breaks, escape_multiline_message, print_check_report_to, safe_path_display,
     warn_suppressed_security_detections, Config, OutputContext, OutputMode, RunResult,
 };
 

@@ -4,11 +4,12 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use fini::{
-    check_editorconfig_conflicts, escape_line_breaks, find_config_file, find_editorconfig,
-    generate_init_file, load_config, merge_exclude_patterns, merge_normalize_config,
-    normalize_content, parse_editorconfig, print_check_report_to, read_gated, run,
-    safe_path_display, should_use_colors, warn_suppressed_security_detections, CliNormalizeOptions,
-    Colors, Config, FiniToml, OutputContext, OutputMode, SkipReason, FIX_KIND_IGNORE_HINT,
+    check_editorconfig_conflicts, escape_line_breaks, escape_multiline_message, find_config_file,
+    find_editorconfig, generate_init_file, load_config, merge_exclude_patterns,
+    merge_normalize_config, normalize_content, parse_editorconfig, print_check_report_to,
+    read_gated, run, safe_path_display, should_use_colors, warn_suppressed_security_detections,
+    CliNormalizeOptions, Colors, Config, FiniToml, OutputContext, OutputMode, SkipReason,
+    FIX_KIND_IGNORE_HINT,
 };
 
 /// Rust's runtime sets SIGPIPE to SIG_IGN at startup; restore the default
@@ -147,7 +148,7 @@ fn main() -> ExitCode {
     let toml_config = match load_configuration(&cli.config, cli.quiet) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("Error: {e}");
+            eprintln!("Error: {}", escape_multiline_message(&e));
             return ExitCode::from(2);
         }
     };
@@ -339,7 +340,9 @@ fn check_editorconfig_warnings() {
     {
         if let Ok(settings) = parse_editorconfig(&editorconfig_path) {
             for warning in check_editorconfig_conflicts(&settings) {
-                eprintln!("Warning: {}", warning);
+                // The warning quotes a value from `.editorconfig`, which the
+                // scanned repository controls.
+                eprintln!("Warning: {}", escape_line_breaks(&warning));
             }
         }
     }
