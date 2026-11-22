@@ -224,11 +224,37 @@ detections are always reported on stderr with `file:line` (even with
 
 Secret detections are reported hint-only — the matched value is never printed.
 `--diff` output masks lines matching a secret pattern
-(`[line masked: potential …]`), and a PEM private key whose BEGIN line is
-detected (`PRIVATE KEY` and `RSA PRIVATE KEY`; other key types are not) is
-masked from that line through its END line, or to the end of the file if
-there is none. A secret that no pattern matches will appear
+(`[line masked: potential …]`), and a private key is masked from its BEGIN
+line through its END line, or to the end of the file if there is none. A
+secret that no pattern matches will appear
 verbatim in a diff: be careful publishing CI logs that include `--diff` output.
+
+What is detected:
+
+- PEM-style private key headers (`BEGIN ... PRIVATE KEY`) with any type label
+  (none, `RSA`, `EC`, `DSA`, `OPENSSH`, `ENCRYPTED`, ...) and PGP private key
+  blocks (`BEGIN PGP PRIVATE KEY BLOCK`)
+- AWS access key ids (`AKIA…`, `ASIA…`) and quoted AWS secret access keys
+- A quoted value assigned to `password`, `passwd`, `secret_key`, `api_key`,
+  `auth_token` or `access_token`, with the key name quoted or not
+  (`password = "…"`, `"api_key": "…"`)
+- The same names in the dotenv shape: an upper-case variable, `=` with no
+  spaces, an unquoted value (`API_KEY=…`, `export DB_PASSWORD=…`). The key
+  word must end the name, so `PASSWORD_RESET_URL` and `API_KEY_FILE` are not
+  reported
+- Bearer tokens, GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
+  `github_pat_`), Slack tokens (`xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-`) and Stripe keys (`sk_live_`, `sk_test_`)
+
+Not detected: other unquoted values (`password: hunter2` in YAML,
+`password = value` in code), since those shapes are mostly not secrets.
+Placeholder values assigned to those names are not reported either: a value
+containing `your`, `xxx`, `changeme`, `example`, `placeholder` or `replace`, one
+equal to the key name (`"password": "Password"`), a single repeated character
+(`********`), or a reference such as `ENV.fetch(...)`. `--diff` still masks such
+lines. Detection is a hint, not a guarantee.
+
+A `TODO` or `FIXME` marker directly preceded by a letter, digit or `_` is part
+of a longer word (`AUTODO:`, `MY_TODO:`) and is not reported.
 
 Disabling secret detection via `fini.toml` (`detect_secrets = false`) prints a
 warning to stderr that `--quiet` does not suppress.
