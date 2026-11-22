@@ -3,9 +3,12 @@
 [![CI](https://github.com/tsukasaI/fini/actions/workflows/ci.yaml/badge.svg)](https://github.com/tsukasaI/fini/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A lightweight file normalization CLI tool for AI coding agents.
+A file normalization CLI that fixes formatting deterministically (trailing
+whitespace, EOF newline, line endings, invisible characters, ...) and reports
+likely mistakes (TODO/FIXME, debug code, secret-looking values).
 
-Standardizes file formatting as a finishing step after code editing.
+Run it as a pre-commit hook so every commit is normalized, whether a person or
+an AI coding agent wrote it.
 
 ## Installation
 
@@ -29,21 +32,28 @@ brew install tsukasaI/fini/fini
 ### Pre-built binaries
 Download from [GitHub Releases](https://github.com/tsukasaI/fini/releases).
 
-### Pre-commit / Prek
+To run fini on every commit, see Pre-commit hook below.
 
-Add to your `.pre-commit-config.yaml`:
+## Pre-commit hook (recommended)
+
+Add to your `.pre-commit-config.yaml` (works with pre-commit and prek):
 
 ```yaml
 repos:
   - repo: https://github.com/tsukasaI/fini
     rev: v0.7.0  # Use the latest release tag
     hooks:
-      - id: fini        # Auto-fix mode
-      # or
-      - id: fini-check  # Check-only mode (for CI)
+      - id: fini        # Fixes formatting; the commit stops if a file changed, so re-stage and commit again
+      - id: fini-check  # Fails on detections (TODO, FIXME, debug code, secrets), which fix mode only reports
 ```
 
-Note: Requires fini to be installed (`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0`, or via Homebrew/Nix). `rev` pins the hook definition only: the hook runs whichever `fini` is on your `PATH`, so keep that installation up to date as well.
+Use both: fix mode exits 0 even when it reports detections (see Exit codes),
+so `fini` alone never blocks a commit on a TODO or secret. `fini-check` does.
+
+Both hooks use `language: system`: they run whichever `fini` is on your
+`PATH`, and `rev` pins only the hook definition. Install fini first
+(`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0`,
+or via Homebrew/Nix as above) and keep it updated.
 
 ## Usage
 
@@ -253,6 +263,10 @@ equal to the key name (`"password": "Password"`), a single repeated character
 (`********`), or a reference such as `ENV.fetch(...)`. `--diff` still masks such
 lines. Detection is a hint, not a guarantee.
 
+fini is not a secret scanner, and its detection is best-effort. To gate
+commits or CI on secrets, use a dedicated scanner such as gitleaks alongside
+fini.
+
 A `TODO` or `FIXME` marker directly preceded by a letter, digit or `_` is part
 of a longer word (`AUTODO:`, `MY_TODO:`) and is not reported.
 
@@ -313,9 +327,10 @@ input, honoring `--max-file-size` (and `max_file_size` in `fini.toml`). Since
 there is no file to skip, such input exits 2 with the reason on stderr and
 nothing on stdout. Empty input is still accepted.
 
-## Claude Code Integration
+## Claude Code Integration (optional)
 
-Add to `.claude/settings.json` (requires [`jq`](https://jqlang.org/)):
+The pre-commit hook above is the recommended setup. To also fix files as
+Claude Code edits them, add to `.claude/settings.json` (requires [`jq`](https://jqlang.org/)):
 
 ```json
 {
@@ -335,10 +350,16 @@ Claude Code passes the hook its input as JSON on stdin; `jq` extracts the
 edited file's path. `xargs -I{}` passes that path as one argument, so paths
 with spaces work, and runs nothing when the input has no `file_path`.
 
+This hook starts fini after every Edit and Write. Over 30 days of Claude Code
+sessions measured for this project, about 1 in 70 Write calls and almost no
+Edit calls left anything to fix, and the pre-commit hook catches the same
+problems at commit time. Because the hook rewrites the file right after the
+agent's edit, the agent may need to re-read the file before its next edit to it.
+
 ## GitHub Action
 
 ```yaml
-- uses: tsukasaI/fini@v0.4.0
+- uses: tsukasaI/fini@v0.7.0
 ```
 
 Pin to a release tag as above, or to a full commit SHA for supply-chain hardening.
@@ -350,18 +371,16 @@ never fails on detection-only problems (TODOs, debug code, secrets) — always u
 ### Options
 
 ```yaml
-- uses: tsukasaI/fini@v0.4.0
+- uses: tsukasaI/fini@v0.7.0
   with:
     files: 'src/ tests/'         # Files/directories to check (default: .)
     check: 'true'                # Check mode, fail if issues found (default: true)
-    version: 'v0.3.0'            # Specific version (default: latest)
-    verify-attestation: 'false'  # Verify SLSA build provenance via `gh attestation verify`
-                                 # (defaults to true as of the version of this action that
-                                 # ships this comment). The default `version: latest` always
-                                 # resolves to an attested release, so this only needs
-                                 # setting to 'false' if you pin `version` to a release
-                                 # before v0.4.0, which predates attestations.
+    version: 'v0.7.0'            # Specific version (default: latest)
+    verify-attestation: 'true'   # Verify SLSA build provenance (default: true)
 ```
+
+Set `verify-attestation` to `'false'` only if you pin `version` to a release
+before v0.4.0, which predates attestations.
 
 ## Exit codes
 
