@@ -14,7 +14,7 @@ an AI coding agent wrote it.
 
 ### Cargo (from source)
 ```bash
-cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0
+cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.8.0
 ```
 
 ### Nix
@@ -41,7 +41,7 @@ Add to your `.pre-commit-config.yaml` (works with pre-commit and prek):
 ```yaml
 repos:
   - repo: https://github.com/tsukasaI/fini
-    rev: v0.7.0  # Use the latest release tag
+    rev: v0.8.0  # Use the latest release tag
     hooks:
       - id: fini        # Fixes formatting; the commit stops if a file changed, so re-stage and commit again
       - id: fini-check  # Fails on detections (TODO, FIXME, debug code, secrets), which fix mode only reports
@@ -52,7 +52,7 @@ so `fini` alone never blocks a commit on a TODO or secret. `fini-check` does.
 
 Both hooks use `language: system`: they run whichever `fini` is on your
 `PATH`, and `rev` pins only the hook definition. Install fini first
-(`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.7.0`,
+(`cargo install --locked --git https://github.com/tsukasaI/fini --tag v0.8.0`,
 or via Homebrew/Nix as above) and keep it updated.
 
 ## Usage
@@ -359,7 +359,7 @@ agent's edit, the agent may need to re-read the file before its next edit to it.
 ## GitHub Action
 
 ```yaml
-- uses: tsukasaI/fini@v0.7.0
+- uses: tsukasaI/fini@v0.8.0
 ```
 
 Pin to a release tag as above, or to a full commit SHA for supply-chain hardening.
@@ -371,11 +371,11 @@ never fails on detection-only problems (TODOs, debug code, secrets) — always u
 ### Options
 
 ```yaml
-- uses: tsukasaI/fini@v0.7.0
+- uses: tsukasaI/fini@v0.8.0
   with:
     files: 'src/ tests/'         # Files/directories to check (default: .)
     check: 'true'                # Check mode, fail if issues found (default: true)
-    version: 'v0.7.0'            # Specific version (default: latest)
+    version: 'v0.8.0'            # Specific version (default: latest)
     verify-attestation: 'true'   # Verify SLSA build provenance (default: true)
 ```
 
