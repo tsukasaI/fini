@@ -160,7 +160,20 @@ fn walk_paths_from(
         for entry in builder.build() {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    // Symlinks too, not just regular files: `process_file`
+                    // refuses each one and reports it as skipped. Dropped
+                    // here, a link inside a walked directory left no trace.
+                    let file_type = entry.file_type();
+                    let is_file_or_symlink =
+                        file_type.is_some_and(|ft| ft.is_file() || ft.is_symlink());
+                    // A link to a directory is not a directory entry, so a
+                    // directory-only pattern (`vendor/`) did not filter it
+                    // above. An excluded path must not be reported as
+                    // "skipped, not inspected".
+                    let is_excluded_dir_link = file_type.is_some_and(|ft| ft.is_symlink())
+                        && excludes.matches(entry.path(), true)
+                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir());
+                    if is_file_or_symlink && !is_excluded_dir_link {
                         let entry_path = entry.into_path();
                         if seen.insert(dedup_key(&entry_path, &mut canon_parent_cache)) {
                             all_files.push(Ok(entry_path));
@@ -1179,6 +1192,31 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_to_an_excluded_directory_is_not_listed() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("third_party/lib.js"));
+        let kept = dir.path().join("proj/main.rs");
+        write_file(&kept);
+        let file_link = dir.path().join("proj/link.rs");
+        std::os::unix::fs::symlink(&kept, &file_link).unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("third_party"),
+            dir.path().join("proj/vendor"),
+        )
+        .unwrap();
+
+        let mut files = walk_files_from(dir.path(), &[&dir.path().join("proj")], &["vendor/"]);
+        files.sort();
+
+        assert_eq!(
+            files,
+            vec![file_link, kept],
+            "the link to a file is listed (to be reported as skipped); the link named by vendor/ is excluded"
+        );
+    }
+
     // issue #274
     #[test]
     fn test_excluded_arguments_are_reported_as_typed() {
@@ -1365,7 +1403,7 @@ mod tests {
     fn test_issue_91() {
         // A root path argument that is itself a symlink to a directory must
         // not be followed: WalkBuilder dereferences the root's own type
-        // directly (unlike a nested symlink, which the walk already skips),
+        // directly (unlike a nested symlink, which the walk never descends),
         // so an unguarded symlink root would have its target's files walked
         // and, in fix mode, rewritten - even though that target can be
         // entirely outside the tree the user meant to scan.

@@ -49,7 +49,7 @@ struct Cli {
     #[arg(short, long)]
     diff: bool,
 
-    /// Output only modified file names
+    /// Output only the names of files that were changed or have problems
     #[arg(short, long)]
     quiet: bool,
 

@@ -174,7 +174,14 @@ pub fn run(paths: &[String], config: &Config, ctx: &OutputContext) -> io::Result
     // checked nothing is the kind of security-relevant surprise --quiet's
     // "only report actionable results" intent doesn't cover (same
     // reasoning as the issue #45 secret-detection-disabled warning).
-    if file_paths.is_empty() && result.errors == 0 {
+    //
+    // Not `file_paths.is_empty()`: the walk also lists symlinks, only so they
+    // are reported as skipped, and a target holding nothing but symlinks was
+    // not inspected either.
+    let nothing_to_inspect = file_paths
+        .iter()
+        .all(|path| fs::symlink_metadata(path).is_ok_and(|m| m.is_symlink()));
+    if nothing_to_inspect && result.errors == 0 {
         eprintln!(
             "Warning: no files matched to scan (empty target, or every file was filtered by .gitignore/hidden-file rules or --exclude/config exclude patterns)"
         );
