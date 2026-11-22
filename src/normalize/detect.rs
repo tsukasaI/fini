@@ -77,7 +77,7 @@ static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             // `["']?` after the key name covers a quoted key (JSON, a
             // Python dict); `=` in the value covers base64 padding.
             regex: Regex::new(
-                r#"(?i)(password|passwd|secret[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token)["']?\s*[=:]\s*["'][a-zA-Z0-9_\-/+@#$%^&*!~.=]{8,}["']"#,
+                r#"(?i)(?<key>password|passwd|secret[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token)["']?\s*[=:]\s*["'](?<value>[a-zA-Z0-9_\-/+@#$%^&*!~.=]{8,})["']"#,
             )
             .unwrap(),
             hint: "hardcoded secret",
@@ -87,9 +87,12 @@ static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             // upper-case name, `=` with no spaces around it, and a value that
             // does not start like a placeholder or an expression. Anything
             // looser (`password = user_input`, `password: string`) would
-            // flag ordinary code and schemas.
+            // flag ordinary code and schemas. The key word must end the name:
+            // `PASSWORD_RESET_URL` and `API_KEY_FILE` hold URLs and paths.
+            // `R`: diffs mask the raw
+            // original, where a lone `\r` is not a line break for plain `m`.
             regex: Regex::new(
-                r#"(?m)^\s*(export\s+)?[A-Z0-9_]*(PASSWORD|PASSWD|SECRET_KEY|API_KEY|AUTH_TOKEN|ACCESS_TOKEN)[A-Z0-9_]*=[^\s"'$<{(\[][^\s]{7,}\s*$"#,
+                r#"(?mR)^\s*(export\s+)?[A-Z0-9_]*(?<key>PASSWORD|PASSWD|SECRET_KEY|API_KEY|AUTH_TOKEN|ACCESS_TOKEN)=(?<value>[^\s"'$<{(\[][^\s]{7,})\s*$"#,
             )
             .unwrap(),
             hint: "hardcoded secret",
@@ -121,6 +124,7 @@ const SECRET_SKIP_PATTERNS: &[&str] = &[
     "std::env",
     "getenv",
     "ENV[",
+    "ENV.fetch",
     "<your-",
     "${",
     "{{",
@@ -252,6 +256,36 @@ fn skip_pattern_within_match(matched: &str) -> bool {
     SECRET_SKIP_PATTERNS.iter().any(|p| matched.contains(p))
 }
 
+const PLACEHOLDER_WORDS: &[&str] = &[
+    "your",
+    "xxx",
+    "changeme",
+    "example",
+    "placeholder",
+    "replace",
+];
+
+/// Whether a match is a placeholder, not a credential. Only the key=value
+/// patterns have `key` and `value` groups, so token-shaped patterns (the
+/// documented `AKIAIOSFODNN7EXAMPLE`) are never excused by it.
+fn is_placeholder_value(caps: &regex::Captures<'_>) -> bool {
+    let (Some(key), Some(value)) = (caps.name("key"), caps.name("value")) else {
+        return false;
+    };
+    let value = value.as_str().to_ascii_lowercase();
+    let squash = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !matches!(c, '_' | '-'))
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    let mut chars = value.chars();
+    let repeated = chars.next().is_some_and(|first| chars.all(|c| c == first));
+    repeated
+        || PLACEHOLDER_WORDS.iter().any(|w| value.contains(w))
+        || squash(&value) == squash(key.as_str())
+}
+
 pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<Problem> {
     let patterns = &*SECRET_PATTERNS;
 
@@ -271,10 +305,9 @@ pub(super) fn detect_secret_patterns(content: &str, line_map: &[usize]) -> Vec<P
                 // short-circuit past a later, unrelated real secret matching
                 // the same pattern on the same line.
                 let reportable = |text: &str| {
-                    pattern
-                        .regex
-                        .find_iter(text)
-                        .any(|m| !skip_pattern_within_match(m.as_str()))
+                    pattern.regex.captures_iter(text).any(|caps| {
+                        !skip_pattern_within_match(&caps[0]) && !is_placeholder_value(&caps)
+                    })
                 };
                 (reportable(line) || stripped.as_deref().is_some_and(reportable)).then(|| Problem {
                     line: line_map[line_idx],
@@ -342,7 +375,7 @@ fn strip_mask_ignorable(text: &str) -> Cow<'_, str> {
 /// enters a `Problem`); diff output must honor the same contract, including
 /// unchanged context lines, so raw values never reach CI logs (issue #44).
 ///
-/// Masking ignores `SECRET_SKIP_PATTERNS` entirely (unlike `detect_secret_patterns`):
+/// Masking ignores `SECRET_SKIP_PATTERNS` and placeholder values entirely (unlike `detect_secret_patterns`):
 /// a skip pattern only decides whether a match is *reported*, never whether a
 /// diff shows raw secret-shaped text — an unrelated trailing comment (or any
 /// other skip-pattern occurrence) must not un-mask a real secret (issue #77).
@@ -826,6 +859,35 @@ mod tests {
     }
 
     #[test]
+    fn test_mask_secret_lines_masks_dotenv_values() {
+        for content in [
+            "API_KEY=abcd1234efgh5678\n",
+            "export X_PASSWORD=abcd1234efgh5678\n",
+        ] {
+            let masked = mask_secret_lines(content);
+            assert!(
+                !masked.contains("abcd1234"),
+                "leaked in {content:?}: {masked:?}"
+            );
+            assert!(masked.contains("[line masked: potential hardcoded secret]"));
+        }
+    }
+
+    #[test]
+    fn test_mask_secret_lines_masks_dotenv_value_after_lone_cr() {
+        for content in [
+            "FOO=1\rAPI_KEY=abcd1234efgh5678\r",
+            "FOO=1\rAPI_KEY=abcd1234efgh5678\n",
+        ] {
+            let masked = mask_secret_lines(content);
+            assert!(
+                !masked.contains("abcd1234"),
+                "leaked in {content:?}: {masked:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_mask_secret_lines_leaves_non_matching_line_untouched() {
         // Unquoted, so it never matches the "hardcoded secret" value pattern in
         // the first place — this is not exercising skip-pattern behavior.
@@ -969,6 +1031,9 @@ mod tests {
             ("AKIAIOSFODNN7EXAMPLE", "AWS access key"),
             ("aws_access_key_id = ASIAIOSFODNN7EXAMPLE", "AWS access key"),
             ("xoxs-0123456789-abcdef", "Slack token"),
+            ("MY_API_KEY=abcd1234efgh5678", "hardcoded secret"),
+            ("DB_PASSWORD=abcd1234efgh5678", "hardcoded secret"),
+            ("{ \"password\": \"hunter2hunter2\" }", "hardcoded secret"),
         ] {
             assert_eq!(secret_hints(&format!("{line}\n")), [hint], "{line}");
         }
@@ -989,12 +1054,44 @@ mod tests {
             "AKIAIOSFODNN7EXAMPLEX",
             "-----BEGIN PUBLIC KEY-----",
             "-----BEGIN CERTIFICATE-----",
+            "PASSWORD_RESET_URL=https://example.com/reset",
+            "API_KEY_FILE=/run/secrets/api_key",
+            "AUTH_TOKEN_URL=https://x.example/token",
+            "PASSWORD_HASH_ALGORITHM=argon2id",
+            "PASSWORD_MIN_LENGTH=12345678",
         ] {
             assert!(
                 secret_hints(&format!("{line}\n")).is_empty(),
                 "{line} must not be reported"
             );
         }
+    }
+
+    #[test]
+    fn test_placeholder_values_are_not_secrets() {
+        for line in [
+            "OPENAI_API_KEY=sk-your-key-here",
+            "API_KEY=your_api_key_here",
+            "API_KEY=xxxxxxxx",
+            "API_KEY=ENV.fetch(\"API_KEY\")",
+            "{ \"password\": \"Password\" }",
+            "\"password\": \"********\"",
+            "\"access_token\": \"accessToken\"",
+            "API_KEY=changeme123",
+            "api_key = \"replace-with-real-key\"",
+            "PASSWORD=example-password",
+        ] {
+            assert!(
+                secret_hints(&format!("{line}\n")).is_empty(),
+                "{line} must not be reported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_placeholder_value_is_still_masked_in_diffs() {
+        let masked = mask_secret_lines("API_KEY=changeme123\n");
+        assert!(!masked.contains("changeme123"), "{masked:?}");
     }
 
     #[test]
