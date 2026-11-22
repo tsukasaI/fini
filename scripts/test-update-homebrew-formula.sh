@@ -99,11 +99,13 @@ reset_formula
 cp "$ASSETS_DIR/checksums.txt" "$WORKDIR/checksums.full"
 grep -v 'aarch64-unknown-linux-gnu' "$WORKDIR/checksums.full" > "$ASSETS_DIR/checksums.txt"
 set +e
-run_script "0.5.0" >/dev/null 2>&1
+run_script "0.5.0" >/dev/null 2>"$WORKDIR/missing-entry.err"
 STATUS=$?
 set -e
 cp "$WORKDIR/checksums.full" "$ASSETS_DIR/checksums.txt"
 [ "$STATUS" -eq 1 ] || fail "checksums.txt without one tarball did not exit 1 (got $STATUS)"
+# The reason, not just the exit code: `sha256sum -c` failing also exits 1.
+grep -q 'no entry for fini-aarch64-unknown-linux-gnu.tar.gz' "$WORKDIR/missing-entry.err" || fail "the missing checksums.txt entry was not the reported reason"
 [ "$(cat "$FORMULA")" = "sentinel: pre-existing content" ] || fail "formula file was modified although a tarball was not in checksums.txt"
 echo "PASS: a tarball missing from checksums.txt is rejected with exit 1, formula untouched"
 

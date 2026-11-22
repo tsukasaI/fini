@@ -108,26 +108,51 @@ pub(super) fn parse_ignore_directives(content: &str, line_map: &[usize]) -> Igno
     map
 }
 
+/// What may close the comment a directive sits in.
+const COMMENT_TERMINATORS: [&str; 5] = ["*/", "-->", "#}", "*)", "%>"];
+
 /// The kinds a directive names, or `None` for "all kinds".
 ///
-/// Each comma-separated piece contributes its leading identifier (letters,
-/// digits, `-`) and nothing after it. Not the whole piece: the directive
-/// sits in a comment, so it is followed by whatever closes that comment
-/// (`*/`, `-->`, `#}`, `*)`, `%>`) or by a reason (`todo -- legacy`), and a
-/// piece read whole became an unknown kind that suppressed nothing.
+/// The list is `name (, name)*`, and it must be followed by nothing, by a
+/// comment terminator, or by a reason introduced with `--`. Anything else
+/// after the directive is not a list fini understands, and the whole of it
+/// is returned as one unknown kind, which suppresses nothing. Not "all
+/// kinds" for unrecognized text: `fini:ignore: todo`, a mention of the
+/// directive inside a string, or a reason without `--` would then suppress
+/// every detection on the line, a secret included.
 fn parse_kind_list(line: &str, offset: usize) -> Option<HashSet<String>> {
-    let kinds: HashSet<String> = line[offset..]
-        .split(',')
-        .filter_map(|piece| {
-            let piece = piece.trim_start();
-            let id_len = piece
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-                .unwrap_or(piece.len());
-            let id = piece[..id_len].trim_matches('-');
-            (!id.is_empty()).then(|| id.to_lowercase())
-        })
-        .collect();
+    let after_directive = line[offset..].trim();
+    let mut kinds = HashSet::new();
+    let mut rest = after_directive;
+    loop {
+        let name_len = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .unwrap_or(rest.len());
+        // Trailing dashes belong to what follows (`todo-->`, `todo--`), and
+        // a leading one is the reason marker, never a name.
+        let name = rest[..name_len].trim_end_matches('-');
+        if name.is_empty() || name.starts_with('-') {
+            break;
+        }
+        kinds.insert(name.to_lowercase());
+        rest = rest[name.len()..].trim_start();
+        match rest.strip_prefix(',') {
+            Some(after_comma) => rest = after_comma.trim_start(),
+            None => break,
+        }
+    }
 
+    let is_reason = rest
+        .strip_prefix("--")
+        .is_some_and(|reason| reason.is_empty() || reason.starts_with(char::is_whitespace));
+    let list_is_complete = rest.is_empty()
+        || is_reason
+        || COMMENT_TERMINATORS
+            .iter()
+            .any(|terminator| rest.starts_with(terminator));
+    if !list_is_complete {
+        return Some(HashSet::from([after_directive.to_lowercase()]));
+    }
     (!kinds.is_empty()).then_some(kinds)
 }
 
@@ -254,6 +279,62 @@ mod tests {
                 "only the named kinds: {content:?}"
             );
         }
+    }
+
+    #[test]
+    fn second_kind_before_a_terminator_is_read() {
+        let content = "(* TODO: x fini:ignore todo, debug *)\n";
+        let map = parse_ignore_directives(content, &identity_line_map(content));
+        assert!(map.is_ignored(1, &ProblemKind::DebugCode { pattern: "print(" }));
+    }
+
+    // A directive is a suppression for a CI gate: text fini does not
+    // understand must never widen it to every kind.
+    #[test]
+    fn unrecognized_text_after_the_directive_suppresses_nothing() {
+        for content in [
+            "token = x # fini:ignore: todo\n",
+            "token = x # fini:ignore [todo]\n",
+            "token = x # fini:ignore (see #12)\n",
+            "token = x # fini:ignore \u{7406}\u{7531}\n",
+            "log(\"see fini:ignore\"); token = x\n",
+            "token = x # fini:ignore todo debug\n",
+            "token = x # fini:ignore\u{202E} todo\n",
+        ] {
+            let map = parse_ignore_directives(content, &identity_line_map(content));
+            for kind in [
+                ProblemKind::SecretPattern { hint: "key" },
+                ProblemKind::TodoComment,
+                ProblemKind::BidiControl,
+            ] {
+                assert!(!map.is_ignored(1, &kind), "{kind:?} in {content:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn terminator_glued_to_a_kind_still_ends_the_list() {
+        for content in [
+            "<!-- TODO: x fini:ignore todo-->\n",
+            "<!-- TODO: x fini:ignore line-length, todo-->\n",
+            "/* TODO: x fini:ignore todo*/\n",
+            "# TODO: x fini:ignore todo--\n",
+        ] {
+            let map = parse_ignore_directives(content, &identity_line_map(content));
+            assert!(map.is_ignored(1, &ProblemKind::TodoComment), "{content:?}");
+            assert!(
+                !map.is_ignored(1, &ProblemKind::SecretPattern { hint: "key" }),
+                "{content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn comma_inside_a_reason_does_not_name_a_kind() {
+        let content = "# TODO: x fini:ignore todo -- legacy, secret rotation pending\n";
+        let map = parse_ignore_directives(content, &identity_line_map(content));
+        assert!(map.is_ignored(1, &ProblemKind::TodoComment));
+        assert!(!map.is_ignored(1, &ProblemKind::SecretPattern { hint: "key" }));
     }
 
     #[test]

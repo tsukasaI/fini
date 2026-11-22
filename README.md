@@ -175,10 +175,12 @@ API_KEY = "sk_test_example"
 
 Kind identifiers: `todo`, `fixme`, `debug`, `secret`, `line-length`, `bidi`
 
-Whatever follows a kind, or follows the directive when no kind is named, is
-not read as a kind unless it starts with a letter or digit: the comment's
-closing marker (`*/`, `-->`, `#}`, `*)`, `%>`) and a reason after `--`
-(`fini:ignore todo -- legacy`) are both fine.
+The kinds are a comma-separated list of names. After the list (or right after
+the directive, for "all kinds") only three things may follow: nothing, the
+comment's closing marker (`*/`, `-->`, `#}`, `*)`, `%>`), or a reason
+introduced by `--` (`fini:ignore todo -- legacy`). With anything else after
+it (`fini:ignore: todo`, `fini:ignore todo debug`, a reason without `--`) the
+directive suppresses nothing.
 
 Only detections can be suppressed. Fix-type problems (fullwidth spaces, zero-width characters, leading blank lines, consecutive blank lines, code block remnants) are never suppressed, since the content changes regardless. Unrecognized or fix-type kinds have no effect; a directive naming only fix-type kinds (e.g. `fini:ignore fullwidth`) prints a one-time stderr hint per run, naming the first such file and how many more (not with `--quiet`). The hint only fires for files where fini finds at least one problem, because directives are not parsed in otherwise clean files.
 

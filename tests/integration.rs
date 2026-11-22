@@ -4397,6 +4397,28 @@ fn test_symlink_inside_a_walked_directory_is_counted_and_listed() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn test_directory_holding_only_symlinks_still_warns_that_nothing_was_scanned() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("d")).unwrap();
+    fs::write(dir.path().join("real.txt"), "ok\n").unwrap();
+    std::os::unix::fs::symlink("../real.txt", dir.path().join("d/link.txt")).unwrap();
+
+    let output = fini_cmd()
+        .current_dir(dir.path())
+        .args(["--check", "--quiet", "d"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files matched"),
+        "listing a symlink as skipped is not scanning anything: {stderr:?}"
+    );
+}
+
 #[test]
 fn test_ignore_directive_works_in_other_comment_styles() {
     let dir = TempDir::new().unwrap();

@@ -55,7 +55,7 @@ runs:
           # Reject anything that isn't a version tag to keep this value safe
           # to use in URLs and filenames downstream. Not a `case` glob:
           # `v[0-9]*` also accepts `v1/../x`.
-          if [[ ! "$INPUT_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+          if [[ ! "$INPUT_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid version '$INPUT_VERSION' (expected vX.Y.Z or X.Y.Z)" >&2
             exit 1
           fi
