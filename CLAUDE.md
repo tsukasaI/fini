@@ -61,6 +61,36 @@ Then detections run: TODOs, FIXMEs, debug code, secrets, line length.
 
 Finally, if any problems exist, `fini:ignore` / `fini:ignore-next-line` directives are parsed from the normalized content and matching detection problems are filtered out (post-filter in `normalize/ignore.rs`). The filter applies to detection kinds only: `ProblemKind::ignore_id()` is `None` for fix kinds, so they are never suppressed.
 
+## Decided policy
+
+Settled product decisions. A review finding that matches a line here is previously decided: settle it as a `note`, not a `needs-decision` issue, unless it shows data loss. Background: `audit/convergence-decisions.md`.
+
+- The primary integration is each repository's pre-commit hook, not a per-edit agent hook: over 30 days of Claude Code transcripts, 1.4% of Write calls and almost no Edit calls needed a fix (`audit/convergence-decisions.md`). No global git hook is offered.
+- Deterministic fixes (trailing whitespace, EOF newline, line endings) are fini's core job and stay, however rarely agents produce them: a program can guarantee them, an agent cannot.
+- Secret detection and diff masking are best-effort hints, not a security boundary. fini does not promise to catch every secret shape or to mask every output path; a leak of a detected secret is an ordinary bug, not a boundary violation. Use a dedicated scanner (e.g. gitleaks) for gating.
+- Invisible characters: remove U+200B, U+2060 and mid-file U+FEFF; keep ZWJ, ZWNJ, LRM and RLM, also between ASCII characters (#265, #278); report bidi controls U+202A to U+202E and U+2066 to U+2069 without rewriting (#279). Marker and debug detection also match the line stripped with the same set secret masking uses, `strip_mask_ignorable` (#277, #285).
+- Exclude patterns: every argument inside the cwd, file or directory, is matched by its real path made relative to the cwd; a symlinked directory that resolves outside the cwd is also matched as typed; a file argument outside the cwd is matched by file name only. A matching directory argument is skipped, and skipped arguments are counted in the summary and listed under `--verbose` (#273, #274, #275, #282, #287).
+- Audits run only before a release and file only medium or higher; lower findings stay in the audit report.
+
+## Quality bar
+
+The `review-gate` skill settles review findings by this table instead of its provenance rows. Inside the bar may become an issue by the usual tiers; outside is a `note` (`## Not filed`) whatever its kind.
+
+| Finding | Bar |
+|---|---|
+| A fix loses or corrupts file content, or writes when a flag promises no write | inside |
+| A crash, a wrong exit code, or output that contradicts README | inside |
+| A detected secret printed raw by an output path (ordinary bug, not a boundary violation) | inside |
+| A change that makes `--check` fail on common non-secret content (config names, placeholders, i18n labels) that no Decided policy line asks fini to report | inside |
+| The change contradicts a Decided policy line | inside |
+| Re-asks a question a Decided policy line answers | outside |
+| A secret shape the patterns do not catch | outside |
+| Wording, comments, test hardening, refactors, naming | outside |
+
+When a finding matches both an inside and an outside row, the inside row wins only for data loss (the first row); otherwise a re-ask of a Decided policy line is outside.
+
+A PR that closes issues for a goal ends its body with `Closed: N / Filed: M`: N issues it closes, M `needs-decision` and bug issues filed from its review. The goal converges when N > M for three goals in a row.
+
 ### Testing conventions
 
 - Unit tests live inline in each module (especially extensive in `normalize/mod.rs`), except `normalize/fix.rs`, whose transformations are covered only indirectly via `normalize_content()` tests in `mod.rs`
