@@ -81,11 +81,13 @@ The `review-gate` skill settles review findings by this table instead of its pro
 | A fix loses or corrupts file content, or writes when a flag promises no write | inside |
 | A crash, a wrong exit code, or output that contradicts README | inside |
 | A detected secret printed raw by an output path (ordinary bug, not a boundary violation) | inside |
-| A change that makes `--check` fail on common non-secret content (config names, placeholders, i18n labels) | inside |
+| A change that makes `--check` fail on common non-secret content (config names, placeholders, i18n labels) that no Decided policy line asks fini to report | inside |
 | The change contradicts a Decided policy line | inside |
 | Re-asks a question a Decided policy line answers | outside |
 | A secret shape the patterns do not catch | outside |
 | Wording, comments, test hardening, refactors, naming | outside |
+
+When a finding matches both an inside and an outside row, the inside row wins only for data loss (the first row); otherwise a re-ask of a Decided policy line is outside.
 
 A PR that closes issues for a goal ends its body with `Closed: N / Filed: M`: N issues it closes, M `needs-decision` and bug issues filed from its review. The goal converges when N > M for three goals in a row.
 
